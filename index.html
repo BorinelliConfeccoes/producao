@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Borinelli · Produção</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#3d4d32">
+<link rel="icon" href="icone-192.png">
+<script>
+if('serviceWorker' in navigator && location.protocol.startsWith('http')){
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+}
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+:root{
+  --verde:#3d4d32; --verde-esc:#2b3823; --creme:#f6fdeb; --dourado:#c7a581;
+  --ink:#22301c; --sub:#6b7a5e; --card:#ffffff; --linha:#dde5d2;
+  --fonte-gothic:'Century Gothic',CenturyGothic,'Futura','Segoe UI',sans-serif;
+  --fonte-display:'Didot','Bodoni MT','Playfair Display',Georgia,serif;
+  --f-abx:#a63d2f; --f-70:#c07a3a; --f-80:#b08d5f; --f-90:#7d9553; --f-100:#3d4d32;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+body{font-family:var(--fonte-gothic); background:var(--creme); color:var(--ink); min-height:100vh;}
+header{background:var(--verde); color:var(--creme); padding:14px 20px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; border-bottom:3px solid var(--dourado);}
+header h1{font-family:var(--fonte-display); font-size:1.5rem; font-weight:400; letter-spacing:.1em; text-transform:uppercase; line-height:1;}
+header .sub{font-family:var(--fonte-gothic); font-size:.68rem; letter-spacing:.5em; text-transform:uppercase; color:var(--dourado); margin-top:3px;}
+#relogio{margin-left:auto; font-variant-numeric:tabular-nums; font-weight:700; font-size:1.05rem;}
+nav{display:flex; background:var(--verde-esc); overflow-x:auto;}
+nav button{flex:1; min-width:100px; padding:12px 8px; background:none; border:none; color:#cfd8bf; font-weight:700; font-size:.82rem; letter-spacing:.06em; text-transform:uppercase; cursor:pointer; border-bottom:3px solid transparent; white-space:nowrap;}
+nav button.on{color:#fff; border-bottom-color:var(--dourado);}
+main{max-width:1180px; margin:0 auto; padding:18px 14px 60px;}
+.tela{display:none;} .tela.on{display:block;}
+h2{font-size:1rem; text-transform:uppercase; letter-spacing:.1em; color:var(--verde); margin:18px 0 10px;}
+.card{background:var(--card); border:1px solid var(--linha); border-radius:12px; padding:16px; margin-bottom:14px;}
+button.acao{background:var(--verde); color:#fff; border:none; border-radius:8px; padding:10px 16px; font-weight:700; cursor:pointer; font-size:.9rem;}
+button.acao.sec{background:#fff; color:var(--verde); border:1.5px solid var(--verde);}
+button.acao.mini{padding:5px 10px; font-size:.78rem;}
+button.acao.alerta{background:var(--f-abx);}
+input,select{padding:9px 10px; border:1.5px solid var(--linha); border-radius:8px; font-size:.95rem; background:#fff; color:var(--ink);}
+input:focus,select:focus{outline:2px solid var(--dourado);}
+label{font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--sub); display:block; margin-bottom:4px;}
+table{width:100%; border-collapse:collapse; font-size:.88rem;}
+th{text-align:left; font-size:.7rem; text-transform:uppercase; letter-spacing:.08em; color:var(--sub); padding:8px 6px; border-bottom:2px solid var(--linha);}
+td{padding:8px 6px; border-bottom:1px solid var(--linha); vertical-align:middle;}
+.faixa{display:inline-block; padding:3px 10px; border-radius:999px; color:#fff; font-weight:800; font-size:.75rem; letter-spacing:.04em;}
+.fx-abx{background:var(--f-abx);} .fx-70{background:var(--f-70);} .fx-80{background:var(--f-80);} .fx-90{background:var(--f-90);} .fx-100{background:var(--f-100);}
+.grid{display:grid; gap:12px;}
+.grid.p2{grid-template-columns:repeat(auto-fill,minmax(280px,1fr));}
+/* ---- BIPAGEM ---- */
+#bipInput{position:absolute; left:-9999px;}
+.bip-zona{border:2.5px dashed var(--dourado); border-radius:14px; padding:26px 18px; text-align:center; background:#fff; cursor:text;}
+.bip-zona .msg{font-size:1.35rem; font-weight:800; color:var(--verde);}
+.bip-zona .det{margin-top:6px; color:var(--sub); font-size:.9rem;}
+#flash{position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:99; flex-direction:column; gap:8px; text-align:center; padding:20px;}
+#flash.ok{background:var(--verde); display:flex;} #flash.erro{background:var(--f-abx); display:flex;}
+#flash .g{color:#fff; font-size:clamp(1.6rem,6vw,3.2rem); font-weight:900; letter-spacing:.02em;}
+#flash .p{color:#e9efd9; font-size:clamp(1rem,3vw,1.5rem); font-weight:600;}
+.chips{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;}
+.chip{padding:8px 14px; border-radius:999px; border:1.5px solid var(--verde); background:#fff; color:var(--verde); font-weight:700; font-size:.85rem; cursor:pointer;}
+.chip.dour{border-color:var(--dourado); color:#8a6c47;}
+.chip.verm{border-color:var(--f-abx); color:var(--f-abx);}
+/* ---- PAINEL ---- */
+.pcard{background:#fff; border:1px solid var(--linha); border-left:6px solid var(--sub); border-radius:12px; padding:14px;}
+.pcard .nome{font-weight:900; font-size:1.1rem; text-transform:uppercase; letter-spacing:.04em;}
+.pcard .op{color:var(--sub); font-weight:700; font-size:.85rem; margin-top:2px;}
+.pcard .nums{display:flex; gap:14px; margin-top:10px; flex-wrap:wrap;}
+.pcard .num b{display:block; font-size:1.35rem; font-variant-numeric:tabular-nums;}
+.pcard .num span{font-size:.68rem; text-transform:uppercase; letter-spacing:.07em; color:var(--sub);}
+.pcard.pausado{border-left-color:var(--f-70); opacity:.85;}
+.badge{font-size:.7rem; font-weight:800; text-transform:uppercase; padding:2px 8px; border-radius:6px; background:var(--creme); color:var(--sub); letter-spacing:.05em;}
+.alertbox{border-left:5px solid var(--f-abx); background:#fdf3f1;}
+/* ---- ETIQUETAS ---- */
+.etq-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px;}
+.etq{border:1.5px solid var(--verde); border-radius:8px; padding:10px; text-align:center; background:#fff; break-inside:avoid;}
+.etq .marca{font-family:var(--fonte-display); font-size:.8rem; letter-spacing:.12em; color:var(--verde);}
+.etq .marca small{display:block; font-family:var(--fonte-gothic); font-size:.5rem; letter-spacing:.45em; color:var(--dourado); margin-top:1px;}
+.etq .t1{font-weight:900; font-size:.95rem; margin-top:6px;} .etq .t2{font-size:.78rem; color:#333;}
+.etq .qr{display:flex; justify-content:center; margin:8px 0;}
+@media print{
+  body *{visibility:hidden;} #areaImpressao, #areaImpressao *{visibility:visible;}
+  #areaImpressao{position:absolute; left:0; top:0; width:100%;}
+  header,nav{display:none;}
+}
+.linhaform{display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:10px;}
+.mini-info{font-size:.8rem; color:var(--sub);}
+.okpill{color:var(--f-90); font-weight:800;} .abxpill{color:var(--f-abx); font-weight:800;}
+</style>
+</head>
+<body>
+<header>
+  <img src="logo.png" alt="Borinelli Confecções" style="height:56px; width:auto;" onerror="this.outerHTML='&lt;div&gt;&lt;h1&gt;BORINELLI&lt;/h1&gt;&lt;div class=sub&gt;CONFECÇÕES&lt;/div&gt;&lt;/div&gt;'">
+  <div id="relogio">--:--:--</div>
+</header>
+<nav>
+  <button data-t="bip" class="on">Bipagem</button>
+  <button data-t="painel">Painel</button>
+  <button data-t="extrato">Extrato</button>
+  <button data-t="ops">OPs & Etiquetas</button>
+  <button data-t="hist">Histórico</button>
+  <button data-t="alertas">Alertas <span id="nAlertas"></span></button>
+  <button data-t="ajustes">Ajustes</button>
+</nav>
+<main>
+
+<!-- BIPAGEM -->
+<section class="tela on" id="t-bip">
+  <input id="bipInput" autocomplete="off">
+  <div class="bip-zona" onclick="focarBip()">
+    <div class="msg" id="bipMsg">Pronto para bipar</div>
+    <div class="det" id="bipDet">Bipe o crachá para começar. O leitor precisa desta tela aberta.</div>
+  </div>
+  <div class="card" style="margin-top:14px;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h2 style="margin:0;">Modo teste (toque para simular o bip)</h2>
+      <button class="acao mini sec" onclick="document.getElementById('simu').style.display=document.getElementById('simu').style.display==='none'?'block':'none'">mostrar / ocultar</button>
+    </div>
+    <div id="simu" style="display:none;">
+      <label style="margin-top:10px;">Crachás</label><div class="chips" id="simPessoas"></div>
+      <label style="margin-top:10px;">Operações</label><div class="chips" id="simOps"></div>
+      <label style="margin-top:10px;">Pacotes em aberto</label><div class="chips" id="simPacotes"></div>
+      <label style="margin-top:10px;">Controles</label>
+      <div class="chips">
+        <span class="chip verm" onclick="bip('X|MAQUINA')">⏸ Máquina quebrada</span>
+        <span class="chip verm" onclick="bip('X|MATERIAL')">⏸ Falta material</span>
+        <span class="chip verm" onclick="bip('X|PESSOAL')">⏸ Pessoal / médico</span>
+        <span class="chip verm" onclick="bip('X|SEMSERVICO')">Sem serviço (fecha ciclo)</span>
+        <span class="chip dour" onclick="bip('X|FIM')">Encerrar ciclo agora</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PAINEL -->
+<section class="tela" id="t-painel">
+  <div class="card" style="border-left:6px solid var(--dourado); display:flex; gap:26px; flex-wrap:wrap; align-items:center;" id="cardSaida"></div>
+  <h2>Célula agora</h2>
+  <div class="grid p2" id="painelCards"></div>
+  <h2>Resumo do dia</h2>
+  <div class="card"><table id="tabDia"></table></div>
+</section>
+
+<!-- EXTRATO -->
+<section class="tela" id="t-extrato">
+  <div class="linhaform">
+    <div><label>Pessoa</label><select id="exPessoa"></select></div>
+    <div><label>Período</label><select id="exDias"><option value="1">Hoje</option><option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="9999">Tudo</option></select></div>
+    <button class="acao" onclick="renderExtrato()">Ver extrato</button>
+  </div>
+  <div id="extratoOut"></div>
+</section>
+
+<!-- OPS -->
+<section class="tela" id="t-ops">
+  <div class="card">
+    <h2 style="margin-top:0;">Cadastrar OP</h2>
+    <div class="linhaform">
+      <div><label>Nº da OP</label><input id="opNum" placeholder="1245" style="width:110px;"></div>
+      <div><label>Tamanho</label><input id="opTam" placeholder="G" style="width:70px;"></div>
+      <div><label>Total de peças</label><input id="opQtd" type="number" placeholder="354" style="width:110px;"></div>
+      <div><label>Peças por pacote</label><input id="opPct" type="number" placeholder="70" style="width:110px;"></div>
+      <button class="acao" onclick="addTamanho()">Adicionar tamanho</button>
+    </div>
+    <div class="mini-info">Ex: 354 peças em pacotes de 70 vira 4 pacotes de 70 e 1 de 74, automático. Repita para cada tamanho da mesma OP.</div>
+  </div>
+  <h2>OPs cadastradas</h2>
+  <div id="listaOps"></div>
+</section>
+
+<!-- HISTORICO -->
+<section class="tela" id="t-hist">
+  <div class="linhaform">
+    <div><label>Pessoa</label><select id="fPessoa"><option value="">Todas</option></select></div>
+    <div><label>Data</label><input id="fData" type="date"></div>
+    <button class="acao sec" onclick="renderHist()">Filtrar</button>
+    <button class="acao sec" onclick="exportarCSV()">Exportar CSV</button>
+  </div>
+  <div class="card"><table id="tabHist"></table></div>
+</section>
+
+<!-- ALERTAS -->
+<section class="tela" id="t-alertas">
+  <h2>Ciclos com anomalia</h2>
+  <div class="mini-info" style="margin-bottom:10px;">Ciclos muito fora do padrão da pessoa. Corrija, aceite como real, ou substitua pela média histórica. Não resolvidos até o fim do dia usam a média automaticamente.</div>
+  <div id="listaAlertas"></div>
+</section>
+
+<!-- AJUSTES -->
+<section class="tela" id="t-ajustes">
+  <div class="card">
+    <h2 style="margin-top:0;">Jornada e regras</h2>
+    <div class="linhaform">
+      <div><label>Início</label><input id="cfgIni" type="time"></div>
+      <div><label>Fim seg a qui</label><input id="cfgFim" type="time"></div>
+      <div><label>Fim sexta</label><input id="cfgFimSex" type="time"></div>
+    </div>
+    <div class="linhaform">
+      <div><label>Café início</label><input id="cfgCafeIni" type="time"></div>
+      <div><label>Café fim</label><input id="cfgCafeFim" type="time"></div>
+      <div><label>Tolerância café (min)</label><input id="cfgCafeTol" type="number" style="width:90px;"></div>
+    </div>
+    <div class="linhaform">
+      <div><label>Tempo de troca (min)</label><input id="cfgTroca" type="number" style="width:90px;"></div>
+      <div><label>Anomalia se fora de (%)</label><input id="cfgAnom" type="number" style="width:90px;" title="Percentual de desvio da média que gera alerta"></div>
+      <button class="acao" onclick="salvarCfg()">Salvar regras</button>
+    </div>
+    <div class="mini-info">Café é descontado automático de todo mundo. O tempo de troca é descontado a cada troca de pacote.</div>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0;">Pessoas</h2>
+    <div class="linhaform"><div><label>Nome</label><input id="novaPessoa" placeholder="Nome"></div><button class="acao" onclick="addPessoa()">Adicionar</button></div>
+    <div class="chips" id="listaPessoas"></div>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0;">Operações e metas (peças/hora)</h2>
+    <div class="linhaform">
+      <div><label>Nome</label><input id="novaOpNome" placeholder="Operação" style="width:180px;"></div>
+      <div><label>70%</label><input id="m70" type="number" style="width:70px;"></div>
+      <div><label>80%</label><input id="m80" type="number" style="width:70px;"></div>
+      <div><label>90%</label><input id="m90" type="number" style="width:70px;"></div>
+      <div><label>100%</label><input id="m100" type="number" style="width:70px;"></div>
+      <button class="acao" onclick="addOperacao()">Adicionar</button>
+    </div>
+    <table id="tabOperacoes"></table>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0;">Imprimir crachás e cartões</h2>
+    <div class="linhaform">
+      <button class="acao" onclick="imprimirCrachas()">Crachás das pessoas</button>
+      <button class="acao" onclick="imprimirCartoes()">Cartões de operação e pausa</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0;">Dados</h2>
+    <button class="acao sec" onclick="baixarBackup()">Baixar backup completo</button>
+    <button class="acao sec" onclick="document.getElementById('arqBackup').click()">Restaurar backup</button>
+    <input type="file" id="arqBackup" accept=".json" style="display:none;" onchange="restaurarBackup(this)">
+    <button class="acao alerta" onclick="if(confirm('Apagar TODOS os ciclos registrados? OPs e cadastros ficam.')) {S.ciclos=[]; salvarTudo(); renderTudo();}">Zerar ciclos</button>
+  </div>
+</section>
+
+</main>
+<div id="areaImpressao"></div>
+<div id="flash" onclick="this.className=''"></div>
+
+<script>
+/* ================= DADOS INICIAIS ================= */
+const OPERACOES_PADRAO = [
+ {id:'OMBRO1', nome:'1 Ombro', metas:[190,210,230,250]},
+ {id:'OMBROS2ETIQ', nome:'2 Ombros com etiqueta', metas:[90,100,120,130]},
+ {id:'OMBROARREMATE', nome:'Ombro com arremate', metas:[170,190,210,230]},
+ {id:'GOLAANEL', nome:'Gola em anel', metas:[85,95,100,110]},
+ {id:'GOLAAPARELHO', nome:'Gola em aparelho overloque', metas:[170,190,210,220]},
+ {id:'MANGA', nome:'Manga', metas:[75,80,90,100]},
+ {id:'BAINHAMANGA', nome:'Bainha manga', metas:[90,110,120,140]},
+ {id:'LATERAL', nome:'Lateral', metas:[75,80,90,100]},
+ {id:'BAINHABARRA', nome:'Bainha barra', metas:[120,140,160,180]},
+ {id:'PESPONTO', nome:'Pesponto reta/cobertura', metas:[160,170,180,200]},
+ {id:'REFORCO', nome:'Reforço', metas:[150,180,200,210]},
+ {id:'REVISAO', nome:'Revisão', metas:[80,90,95,100]}
+];
+const PESSOAS_PADRAO = ['Grasi','Ivonete','Jackson','Josiane','Marilene','Scarlett','Valdirene','Carla'].map(n=>({id:n.toUpperCase(), nome:n}));
+const BASELINES_PADRAO = {
+ 'GRASI|BAINHABARRA':160,'GRASI|MANGA':142,'GRASI|PESPONTO':84,
+ 'IVONETE|MANGA':57,'IVONETE|LATERAL':83,
+ 'JACKSON|LATERAL':68,'JACKSON|MANGA':72,
+ 'JOSIANE|REFORCO':173,'JOSIANE|PESPONTO':194,
+ 'MARILENE|LATERAL':56,'MARILENE|MANGA':56,
+ 'SCARLETT|LATERAL':77,
+ 'VALDIRENE|MANGA':77,'VALDIRENE|GOLAANEL':82,'VALDIRENE|OMBROARREMATE':89,
+ 'CARLA|MANGA':46,'CARLA|OMBROS2ETIQ':54
+};
+const CFG_PADRAO = {ini:'05:00', fim:'14:30', fimSex:'13:30', cafeIni:'08:30', cafeFim:'09:00', cafeTol:5, troca:3, anom:55};
+const PAUSAS = {MAQUINA:'Máquina quebrada', MATERIAL:'Falta de material', PESSOAL:'Pessoal / médico'};
+
+let S = {cfg:{...CFG_PADRAO}, pessoas:PESSOAS_PADRAO, operacoes:OPERACOES_PADRAO, baselines:BASELINES_PADRAO, ordens:[], ciclos:[]};
+let sel = null;          // pessoa selecionada pelo crachá
+let pendingOp = null;    // operação bipada aguardando pacote
+
+/* ================= PERSISTÊNCIA ================= */
+const temStorageClaude = typeof window.storage !== 'undefined';
+async function lerDados(){
+  if(temStorageClaude){
+    try{ const r=await window.storage.get('borinelli-prod'); return r&&r.value? r.value:null; }catch(e){ return null; }
+  }
+  return localStorage.getItem('borinelli-prod');
+}
+async function gravarDados(str){
+  if(temStorageClaude){
+    try{ await window.storage.set('borinelli-prod', str); }catch(e){ console.error('Falha ao salvar', e); }
+  } else {
+    try{ localStorage.setItem('borinelli-prod', str); }catch(e){ alert('Falha ao salvar os dados no navegador.'); }
+  }
+}
+async function carregar(){
+  const v = await lerDados();
+  if(v){ try{ S = Object.assign(S, JSON.parse(v)); }catch(e){} }
+  fecharDiasAnteriores();
+  renderTudo(); preencherCfg();
+}
+let salvarTimer=null;
+function salvarTudo(){
+  clearTimeout(salvarTimer);
+  salvarTimer = setTimeout(()=> gravarDados(JSON.stringify(S)), 300);
+}
+
+/* ================= TEMPO ================= */
+const fmtH = ms => { const m=Math.round(ms/60000); return Math.floor(m/60)+'h'+String(m%60).padStart(2,'0'); };
+const fmtHora = ts => new Date(ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+const fmtData = ts => new Date(ts).toLocaleDateString('pt-BR');
+function horaDoDia(ts, hhmm){ const d=new Date(ts); const [h,m]=hhmm.split(':').map(Number); d.setHours(h,m,0,0); return d.getTime(); }
+function fimJornada(ts){ const dia=new Date(ts).getDay(); return horaDoDia(ts, dia===5? S.cfg.fimSex : S.cfg.fim); }
+function overlap(a1,a2,b1,b2){ return Math.max(0, Math.min(a2,b2)-Math.max(a1,b1)); }
+
+// tempo útil = fim-ini, menos pausas, menos café (com tolerância)
+function tempoUtil(c){
+  let fim = c.fim || Date.now();
+  let ms = fim - c.ini;
+  (c.pausas||[]).forEach(p=> ms -= ((p.fim||Date.now()) - p.ini));
+  const cafeIni = horaDoDia(c.ini, S.cfg.cafeIni);
+  const cafeFim = horaDoDia(c.ini, S.cfg.cafeFim) + (S.cfg.cafeTol*60000);
+  ms -= overlap(c.ini, fim, cafeIni, cafeFim);
+  return Math.max(ms, 60000); // mínimo 1 min para não dividir por zero
+}
+function rateDe(c){ return c.qtd / (tempoUtil(c)/3600000); }
+function faixaDe(opId, rate){
+  const op = S.operacoes.find(o=>o.id===opId); if(!op) return {tx:'—', cls:''};
+  const [m70,m80,m90,m100]=op.metas;
+  if(rate>=m100) return {tx:'100%', cls:'fx-100'};
+  if(rate>=m90) return {tx:'90%', cls:'fx-90'};
+  if(rate>=m80) return {tx:'80%', cls:'fx-80'};
+  if(rate>=m70) return {tx:'70%', cls:'fx-70'};
+  return {tx:'Abaixo de 70%', cls:'fx-abx'};
+}
+function baseline(pessoa, opId){
+  const fechados = S.ciclos.filter(c=>c.pessoa===pessoa && c.op===opId && c.fim && !c.flag);
+  if(fechados.length>=3){
+    const rates = fechados.slice(-30).map(c=> c.rateEfetivo || rateDe(c)).sort((a,b)=>a-b);
+    return rates[Math.floor(rates.length/2)];
+  }
+  return S.baselines[pessoa+'|'+opId] || null;
+}
+
+/* ================= BIP ================= */
+function focarBip(){ const i=document.getElementById('bipInput'); i.value=''; i.focus(); }
+document.addEventListener('DOMContentLoaded', ()=>{
+  const inp=document.getElementById('bipInput');
+  inp.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ const v=inp.value.trim(); inp.value=''; if(v) bip(v); }
+  });
+  setInterval(()=>{ // manter foco na tela de bipagem
+    if(document.querySelector('#t-bip.on') && document.activeElement.tagName!=='INPUT' && document.activeElement.tagName!=='SELECT') focarBip();
+  }, 2000);
+});
+
+function ciclosAbertos(pessoa){ return S.ciclos.filter(c=>c.pessoa===pessoa && !c.fim); }
+
+function fecharCiclo(c, quando, motivo){
+  c.fim = Math.max(quando, c.ini + 60000);
+  (c.pausas||[]).forEach(p=>{ if(!p.fim) p.fim=c.fim; });
+  c.fechamento = motivo;
+  const rate = rateDe(c);
+  c.rateEfetivo = rate;
+  const base = baseline(c.pessoa, c.op);
+  const lim = S.cfg.anom/100;
+  if(base && (rate < base*(1-lim) || rate > base*(1+lim))){
+    c.flag='anomalia'; c.baseNaHora=base;
+  }
+}
+
+function bip(code){
+  const partes = code.split('|');
+  const tipo = partes[0].toUpperCase();
+  const agora = Date.now();
+
+  if(tipo==='C'){ // crachá
+    const p = S.pessoas.find(x=>x.id===partes[1]);
+    if(!p) return flash(false,'Crachá não reconhecido', code);
+    sel = p.id; pendingOp=null;
+    const aberto = ciclosAbertos(p.id)[0];
+    if(aberto && aberto.pausas && aberto.pausas.some(x=>!x.fim)){
+      aberto.pausas.find(x=>!x.fim).fim = agora;
+      flash(true, p.nome+' de volta', 'Pausa encerrada, relógio rodando');
+    } else {
+      flash(true, p.nome, aberto ? 'Bipe o próximo pacote (fecha o atual) ou um controle' : 'Bipe a operação ou direto o pacote');
+    }
+  }
+  else if(tipo==='O'){ // cartão de operação
+    if(!sel) return flash(false,'Bipe o crachá primeiro','');
+    const op = S.operacoes.find(o=>o.id===partes[1]);
+    if(!op) return flash(false,'Operação não reconhecida', code);
+    pendingOp = op.id;
+    flash(true, op.nome, 'Agora bipe o pacote');
+  }
+  else if(tipo==='K'){ // pacote: K|opNum|tam|nPacote|qtd
+    if(!sel) return flash(false,'Bipe o crachá primeiro','');
+    const [_, num, tam, nPac, qtd] = partes;
+    const pessoa = S.pessoas.find(x=>x.id===sel);
+    let opId = pendingOp;
+    if(!opId){
+      const ult = S.ciclos.filter(c=>c.pessoa===sel).slice(-1)[0];
+      opId = ult ? ult.op : null;
+    }
+    if(!opId) return flash(false,'Falta a operação','Bipe o cartão da operação e depois o pacote');
+    // fecha ciclo anterior descontando tempo de troca
+    const aberto = ciclosAbertos(sel)[0];
+    if(aberto) fecharCiclo(aberto, agora - S.cfg.troca*60000, 'bip');
+    S.ciclos.push({id:agora+'-'+sel, pessoa:sel, op:opId, ordem:num, tam, pacote:nPac, qtd:Number(qtd), ini:agora, pausas:[]});
+    pendingOp=null;
+    const opNome = S.operacoes.find(o=>o.id===opId).nome;
+    flash(true, pessoa.nome+' · '+opNome, 'OP '+num+' · Tam '+tam+' · Pacote '+nPac+' · '+qtd+' peças');
+    salvarTudo(); renderTudo(); return;
+  }
+  else if(tipo==='X'){
+    if(!sel) return flash(false,'Bipe o crachá primeiro','');
+    const aberto = ciclosAbertos(sel)[0];
+    const sub = partes[1];
+    if(sub==='FIM'){
+      if(!aberto) return flash(false,'Nenhum ciclo aberto','');
+      fecharCiclo(aberto, agora, 'bip');
+      flash(true,'Ciclo encerrado', aberto.qtd+' peças registradas');
+    }
+    else if(sub==='SEMSERVICO'){
+      if(aberto){ fecharCiclo(aberto, agora, 'bip'); }
+      flash(true,'Sem serviço', 'Ciclo fechado. Tempo parado conta como falta de abastecimento.');
+    }
+    else if(PAUSAS[sub]){
+      if(!aberto) return flash(false,'Nenhum ciclo aberto para pausar','');
+      aberto.pausas.push({ini:agora, tipo:sub});
+      flash(true,'Pausa: '+PAUSAS[sub], 'Bipe o crachá quando voltar');
+    }
+    else return flash(false,'Controle não reconhecido', code);
+  }
+  else return flash(false,'Código não reconhecido', code);
+  salvarTudo(); renderTudo();
+}
+
+function flash(ok, g, p){
+  const f=document.getElementById('flash');
+  f.className = ok?'ok':'erro';
+  f.innerHTML = '<div class="g">'+g+'</div><div class="p">'+p+'</div>';
+  setTimeout(()=>{ f.className=''; }, 2200);
+  document.getElementById('bipMsg').textContent = g;
+  document.getElementById('bipDet').textContent = p;
+}
+
+/* ================= FECHAMENTO AUTOMÁTICO ================= */
+function fecharDiasAnteriores(){
+  const hoje = new Date().toDateString();
+  S.ciclos.forEach(c=>{
+    if(!c.fim && new Date(c.ini).toDateString()!==hoje){
+      fecharCiclo(c, fimJornada(c.ini), 'auto');
+    }
+  });
+  // anomalias antigas não resolvidas: substitui pela média
+  S.ciclos.forEach(c=>{
+    if(c.flag==='anomalia' && !c.resolucao && new Date(c.fim).toDateString()!==hoje){
+      const base = c.baseNaHora || baseline(c.pessoa,c.op);
+      if(base){ c.rateEfetivo=base; c.resolucao='media-auto'; }
+      else c.resolucao='aceito-auto';
+    }
+  });
+  salvarTudo();
+}
+setInterval(()=>{ // fim de jornada com atraso de 10 min
+  const agora=Date.now();
+  let mudou=false;
+  S.ciclos.forEach(c=>{
+    if(!c.fim && agora > fimJornada(c.ini)+10*60000){ fecharCiclo(c, fimJornada(c.ini), 'auto'); mudou=true; }
+  });
+  if(mudou){ salvarTudo(); renderTudo(); }
+}, 60000);
+
+/* ================= OPs / PACOTES ================= */
+function dividirPacotes(total, porPacote){
+  const n = Math.floor(total/porPacote), rem = total % porPacote;
+  const lista=[];
+  if(rem===0){ for(let i=0;i<n;i++) lista.push(porPacote); }
+  else if(rem < porPacote/2 && n>0){ for(let i=0;i<n-1;i++) lista.push(porPacote); lista.push(porPacote+rem); }
+  else { for(let i=0;i<n;i++) lista.push(porPacote); lista.push(rem); }
+  return lista;
+}
+function addTamanho(){
+  const num=document.getElementById('opNum').value.trim();
+  const tam=document.getElementById('opTam').value.trim().toUpperCase();
+  const qtd=Number(document.getElementById('opQtd').value);
+  const pct=Number(document.getElementById('opPct').value);
+  if(!num||!tam||!qtd||!pct) return alert('Preencha OP, tamanho, total e peças por pacote.');
+  let ordem = S.ordens.find(o=>o.num===num);
+  if(!ordem){ ordem={num, criada:Date.now(), tamanhos:[]}; S.ordens.push(ordem); }
+  ordem.tamanhos = ordem.tamanhos.filter(t=>t.tam!==tam);
+  ordem.tamanhos.push({tam, total:qtd, pacotes:dividirPacotes(qtd,pct).map((q,i)=>({n:i+1, qtd:q}))});
+  salvarTudo(); renderOps();
+  document.getElementById('opTam').value=''; document.getElementById('opQtd').value='';
+}
+function renderOps(){
+  const div=document.getElementById('listaOps');
+  if(!S.ordens.length){ div.innerHTML='<div class="card mini-info">Nenhuma OP cadastrada ainda.</div>'; return; }
+  div.innerHTML = S.ordens.map(o=>{
+    const linhas = o.tamanhos.map(t=>{
+      const feitos = new Set(S.ciclos.filter(c=>c.ordem===o.num && c.tam===t.tam && c.fim).map(c=>c.pacote+'|'+c.op)).size;
+      return '<tr><td><b>'+t.tam+'</b></td><td>'+t.total+' pçs</td><td>'+t.pacotes.map(p=>p.qtd).join(' + ')+'</td><td>'+t.pacotes.length+' pacotes</td></tr>';
+    }).join('');
+    return '<div class="card"><div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; align-items:center;">'+
+      '<b style="font-size:1.05rem;">OP '+o.num+'</b><div>'+
+      '<button class="acao mini" onclick="imprimirEtiquetas(\''+o.num+'\')">Imprimir etiquetas</button> '+
+      '<button class="acao mini alerta" onclick="if(confirm(\'Excluir OP '+o.num+'?\')){S.ordens=S.ordens.filter(x=>x.num!==\''+o.num+'\'); salvarTudo(); renderOps();}">Excluir</button>'+
+      '</div></div><table><tr><th>Tam</th><th>Total</th><th>Divisão</th><th>Pacotes</th></tr>'+linhas+'</table></div>';
+  }).join('');
+  renderSimu();
+}
+
+/* ================= IMPRESSÃO ================= */
+function etiquetaHTML(codigo, t1, t2, t3){
+  return '<div class="etq"><div class="marca">BORINELLI<small>CONFEC\u00c7\u00d5ES</small></div><div class="t1">'+t1+'</div><div class="t2">'+t2+'</div><div class="qr" data-code="'+codigo+'"></div><div class="t2"><b>'+t3+'</b></div></div>';
+}
+function montarImpressao(html){
+  const area=document.getElementById('areaImpressao');
+  area.innerHTML='<div class="etq-grid">'+html+'</div>';
+  area.querySelectorAll('.qr').forEach(el=>{ new QRCode(el,{text:el.dataset.code, width:110, height:110, correctLevel:QRCode.CorrectLevel.M}); });
+  setTimeout(()=>window.print(), 400);
+}
+function imprimirEtiquetas(num){
+  const o=S.ordens.find(x=>x.num===num); if(!o) return;
+  let html='';
+  o.tamanhos.forEach(t=> t.pacotes.forEach(p=>{
+    html += etiquetaHTML('K|'+num+'|'+t.tam+'|'+p.n+'|'+p.qtd, 'OP '+num+' · TAM '+t.tam, 'Pacote '+p.n+' de '+t.pacotes.length, p.qtd+' peças');
+  }));
+  montarImpressao(html);
+}
+function imprimirCrachas(){
+  montarImpressao(S.pessoas.map(p=> etiquetaHTML('C|'+p.id, p.nome.toUpperCase(), 'Crachá pessoal', '')).join(''));
+}
+function imprimirCartoes(){
+  let html = S.operacoes.map(o=> etiquetaHTML('O|'+o.id, o.nome.toUpperCase(), 'Cartão de operação', 'Meta 100%: '+o.metas[3]+' pçs/h')).join('');
+  Object.entries(PAUSAS).forEach(([k,v])=> html+= etiquetaHTML('X|'+k, '⏸ '+v.toUpperCase(), 'Pausa: bipe o crachá ao voltar', ''));
+  html += etiquetaHTML('X|SEMSERVICO','SEM SERVIÇO','Fecha o ciclo, tempo não conta contra a pessoa','');
+  html += etiquetaHTML('X|FIM','ENCERRAR CICLO','Fecha o pacote atual agora','');
+  montarImpressao(html);
+}
+
+/* ================= PAINEL ================= */
+function renderSaida(){
+  const hoje=new Date().toDateString(); const agora=Date.now();
+  const bainhas=S.ciclos.filter(c=> c.op==='BAINHABARRA' && c.fim && new Date(c.fim).toDateString()===hoje);
+  const pcs=bainhas.reduce((s,c)=>s+c.qtd,0);
+  const horas=bainhas.reduce((s,c)=>s+tempoUtil(c),0)/3600000;
+  const ritmo=horas>0? pcs/horas : 0;
+  const restH=Math.max(0, fimJornada(agora)-agora)/3600000;
+  const prev=ritmo>0? Math.round(pcs+ritmo*restH) : pcs;
+  const emAndamento=S.ciclos.filter(c=> c.op==='BAINHABARRA' && !c.fim).reduce((s,c)=>s+c.qtd,0);
+  document.getElementById('cardSaida').innerHTML=
+    '<div><div style="font-size:.7rem; text-transform:uppercase; letter-spacing:.14em; color:var(--dourado); font-weight:800;">Peças prontas hoje · Bainha barra</div>'+
+    '<div style="font-size:2.4rem; font-weight:900; font-variant-numeric:tabular-nums; color:var(--verde);">'+pcs+'</div></div>'+
+    '<div class="num"><b style="font-size:1.3rem;">'+(ritmo?Math.round(ritmo):'—')+'</b><span style="display:block; font-size:.68rem; text-transform:uppercase; letter-spacing:.07em; color:var(--sub);">pçs/h na bainha</span></div>'+
+    '<div class="num"><b style="font-size:1.3rem;">'+prev+'</b><span style="display:block; font-size:.68rem; text-transform:uppercase; letter-spacing:.07em; color:var(--sub);">previsão fim do dia</span></div>'+
+    '<div class="num"><b style="font-size:1.3rem;">'+emAndamento+'</b><span style="display:block; font-size:.68rem; text-transform:uppercase; letter-spacing:.07em; color:var(--sub);">pçs em bainha agora</span></div>';
+}
+/* ================= EXTRATO ================= */
+function renderExtrato(){
+  const pid=document.getElementById('exPessoa').value;
+  const dias=Number(document.getElementById('exDias').value);
+  const p=S.pessoas.find(x=>x.id===pid); if(!p) return;
+  const desde=Date.now()-dias*86400000;
+  const ciclos=S.ciclos.filter(c=>c.pessoa===pid && c.fim && c.ini>=desde);
+  const porOp={};
+  ciclos.forEach(c=>{
+    if(!porOp[c.op]) porOp[c.op]={n:0,pcs:0,ms:0,rates:[]};
+    const g=porOp[c.op]; g.n++; g.pcs+=c.qtd; g.ms+=tempoUtil(c); g.rates.push(c.rateEfetivo||rateDe(c));
+  });
+  let html='<div class="card"><h2 style="margin-top:0;">'+p.nome+' · últimos '+(dias>=9999?'todos os':dias)+' dias</h2>';
+  if(!ciclos.length){ html+='<div class="mini-info">Nenhum ciclo fechado no período.</div></div>'; }
+  else{
+    html+='<table><tr><th>Operação</th><th>Pacotes</th><th>Peças</th><th>Horas</th><th>Média pçs/h</th><th>Faixa</th><th>vs mês passado</th></tr>';
+    let totPcs=0, totMs=0;
+    Object.entries(porOp).forEach(([opId,g])=>{
+      totPcs+=g.pcs; totMs+=g.ms;
+      const media=g.pcs/(g.ms/3600000);
+      const fx=faixaDe(opId, media);
+      const base=S.baselines[pid+'|'+opId];
+      let comp='—';
+      if(base){
+        const d=Math.round((media/base-1)*100);
+        comp = d>=0? '<span class="okpill">▲ +'+d+'%</span>' : '<span class="abxpill">▼ '+d+'%</span>';
+      }
+      const opNome=(S.operacoes.find(o=>o.id===opId)||{}).nome||opId;
+      html+='<tr><td><b>'+opNome+'</b></td><td>'+g.n+'</td><td>'+g.pcs+'</td><td>'+fmtH(g.ms)+'</td><td><b>'+Math.round(media)+'</b></td><td><span class="faixa '+fx.cls+'">'+fx.tx+'</span></td><td>'+comp+'</td></tr>';
+    });
+    html+='<tr><td><b>TOTAL</b></td><td>'+ciclos.length+'</td><td><b>'+totPcs+'</b></td><td>'+fmtH(totMs)+'</td><td><b>'+Math.round(totPcs/(totMs/3600000))+'</b></td><td></td><td></td></tr></table></div>';
+    // por dia
+    const porDia={};
+    ciclos.forEach(c=>{ const d=fmtData(c.ini); if(!porDia[d]) porDia[d]={pcs:0,ms:0,n:0}; porDia[d].pcs+=c.qtd; porDia[d].ms+=tempoUtil(c); porDia[d].n++; });
+    html+='<div class="card"><h2 style="margin-top:0;">Dia a dia</h2><table><tr><th>Data</th><th>Pacotes</th><th>Peças</th><th>Horas</th><th>Média pçs/h</th></tr>';
+    Object.entries(porDia).reverse().forEach(([d,g])=>{
+      html+='<tr><td>'+d+'</td><td>'+g.n+'</td><td>'+g.pcs+'</td><td>'+fmtH(g.ms)+'</td><td><b>'+Math.round(g.pcs/(g.ms/3600000))+'</b></td></tr>';
+    });
+    html+='</table></div>';
+  }
+  document.getElementById('extratoOut').innerHTML=html;
+}
+function renderPainel(){
+  const div=document.getElementById('painelCards');
+  const agora=Date.now();
+  div.innerHTML = S.pessoas.map(p=>{
+    const c = ciclosAbertos(p.id)[0];
+    if(!c) return '<div class="pcard"><div class="nome">'+p.nome+'</div><div class="op">Sem pacote aberto</div></div>';
+    const opNome = (S.operacoes.find(o=>o.id===c.op)||{}).nome || c.op;
+    const pausado = c.pausas.some(x=>!x.fim);
+    const util = tempoUtil(c);
+    const base = baseline(p.id, c.op);
+    const rateSeFecharAgora = c.qtd/(util/3600000);
+    const fx = faixaDe(c.op, rateSeFecharAgora);
+    let eta='—', status='';
+    if(base){
+      const previstoMs = c.qtd/base*3600000;
+      eta = fmtHora(c.ini + previstoMs + (agora - c.ini - util));
+      const razao = util/previstoMs;
+      status = razao<=0.95 ? '<span class="okpill">no ritmo ou acima</span>' : razao<=1.1 ? '<span style="color:var(--f-70); font-weight:800;">na média</span>' : '<span class="abxpill">abaixo da média</span>';
+    }
+    return '<div class="pcard'+(pausado?' pausado':'')+'" style="border-left-color:var(--'+({'fx-abx':'f-abx','fx-70':'f-70','fx-80':'f-80','fx-90':'f-90','fx-100':'f-100'}[fx.cls]||'sub')+')">'+
+      '<div style="display:flex; justify-content:space-between;"><div class="nome">'+p.nome+'</div>'+(pausado?'<span class="badge">Em pausa</span>':'')+'</div>'+
+      '<div class="op">'+opNome+' · OP '+c.ordem+' · Tam '+c.tam+' · Pct '+c.pacote+' ('+c.qtd+' pçs)</div>'+
+      '<div class="nums">'+
+        '<div class="num"><b>'+fmtH(util)+'</b><span>Tempo útil</span></div>'+
+        '<div class="num"><b>'+Math.round(rateSeFecharAgora)+'</b><span>pçs/h se fechar agora</span></div>'+
+        '<div class="num"><b>'+eta+'</b><span>Previsão de término</span></div>'+
+      '</div>'+
+      '<div style="margin-top:10px; display:flex; gap:10px; align-items:center;"><span class="faixa '+fx.cls+'">'+fx.tx+'</span> '+status+'</div>'+
+    '</div>';
+  }).join('');
+  renderResumoDia();
+}
+function renderResumoDia(){
+  const hoje = new Date().toDateString();
+  const doDia = S.ciclos.filter(c=> new Date(c.ini).toDateString()===hoje);
+  const tab=document.getElementById('tabDia');
+  const agora=Date.now(), fimJ=fimJornada(agora);
+  let html='<tr><th>Pessoa</th><th>Pacotes</th><th>Peças fechadas</th><th>Média do dia</th><th>Faixa</th><th>Previsão fim do dia</th></tr>';
+  S.pessoas.forEach(p=>{
+    const fechados = doDia.filter(c=>c.pessoa===p.id && c.fim);
+    const pcs = fechados.reduce((s,c)=>s+c.qtd,0);
+    const horas = fechados.reduce((s,c)=>s+tempoUtil(c),0)/3600000;
+    const media = horas>0 ? pcs/horas : 0;
+    const opRef = fechados.length? fechados[fechados.length-1].op : (ciclosAbertos(p.id)[0]||{}).op;
+    const fx = opRef && media? faixaDe(opRef, media) : {tx:'—', cls:''};
+    const restanteH = Math.max(0, fimJ-agora)/3600000;
+    const prev = media>0 ? Math.round(pcs + media*restanteH) : '—';
+    html+='<tr><td><b>'+p.nome+'</b></td><td>'+fechados.length+'</td><td>'+pcs+'</td><td>'+(media?Math.round(media)+' pçs/h':'—')+'</td><td>'+(fx.cls?'<span class="faixa '+fx.cls+'">'+fx.tx+'</span>':'—')+'</td><td>'+prev+'</td></tr>';
+  });
+  tab.innerHTML=html;
+}
+
+/* ================= HISTÓRICO ================= */
+function renderHist(){
+  const fp=document.getElementById('fPessoa').value;
+  const fd=document.getElementById('fData').value;
+  const lista=S.ciclos.filter(c=>c.fim)
+    .filter(c=>!fp||c.pessoa===fp)
+    .filter(c=>!fd|| new Date(c.ini).toISOString().slice(0,10)===fd)
+    .sort((a,b)=>b.ini-a.ini).slice(0,300);
+  let html='<tr><th>Data</th><th>Pessoa</th><th>Operação</th><th>OP/Tam/Pct</th><th>Peças</th><th>Início</th><th>Fim</th><th>Tempo útil</th><th>Pçs/h</th><th>Faixa</th><th></th></tr>';
+  lista.forEach(c=>{
+    const rate = c.rateEfetivo || rateDe(c);
+    const fx = faixaDe(c.op, rate);
+    const opNome=(S.operacoes.find(o=>o.id===c.op)||{}).nome||c.op;
+    const marca = c.resolucao && c.resolucao.startsWith('media')?' <span class="badge">estimado</span>': c.fechamento==='auto'?' <span class="badge">auto</span>':'';
+    html+='<tr><td>'+fmtData(c.ini)+'</td><td>'+c.pessoa+'</td><td>'+opNome+'</td><td>'+c.ordem+'/'+c.tam+'/'+c.pacote+'</td><td>'+c.qtd+'</td><td>'+fmtHora(c.ini)+'</td><td>'+fmtHora(c.fim)+'</td><td>'+fmtH(tempoUtil(c))+'</td><td><b>'+Math.round(rate)+'</b>'+marca+'</td><td><span class="faixa '+fx.cls+'">'+fx.tx+'</span></td>'+
+    '<td><button class="acao mini sec" onclick="editarCiclo(\''+c.id+'\')">editar</button></td></tr>';
+  });
+  document.getElementById('tabHist').innerHTML = html + (lista.length?'':'<tr><td colspan="11" class="mini-info">Nenhum ciclo fechado ainda.</td></tr>');
+}
+function editarCiclo(id){
+  const c=S.ciclos.find(x=>x.id===id); if(!c) return;
+  const ini=prompt('Hora de início (HH:MM):', fmtHora(c.ini)); if(ini===null) return;
+  const fim=prompt('Hora de fim (HH:MM):', fmtHora(c.fim)); if(fim===null) return;
+  try{
+    c.ini=horaDoDia(c.ini, ini); c.fim=horaDoDia(c.fim||c.ini, fim);
+    c.rateEfetivo=rateDe(c); c.flag=null; c.resolucao='corrigido'; c.fechamento='manual';
+    salvarTudo(); renderTudo();
+  }catch(e){ alert('Horário inválido'); }
+}
+function exportarCSV(){
+  const linhas=[['data','pessoa','operacao','op','tam','pacote','pecas','inicio','fim','tempo_util_min','pcs_hora','faixa','obs']];
+  S.ciclos.filter(c=>c.fim).forEach(c=>{
+    const rate=c.rateEfetivo||rateDe(c);
+    linhas.push([fmtData(c.ini),c.pessoa,c.op,c.ordem,c.tam,c.pacote,c.qtd,fmtHora(c.ini),fmtHora(c.fim),Math.round(tempoUtil(c)/60000),Math.round(rate),faixaDe(c.op,rate).tx,c.resolucao||c.fechamento||'']);
+  });
+  const blob=new Blob([linhas.map(l=>l.join(';')).join('\n')],{type:'text/csv'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='producao-borinelli.csv'; a.click();
+}
+
+/* ================= ALERTAS ================= */
+function renderAlertas(){
+  const pend=S.ciclos.filter(c=>c.flag==='anomalia' && !c.resolucao);
+  document.getElementById('nAlertas').textContent = pend.length? '('+pend.length+')':'';
+  const div=document.getElementById('listaAlertas');
+  if(!pend.length){ div.innerHTML='<div class="card mini-info">Nenhuma anomalia pendente.</div>'; return; }
+  div.innerHTML=pend.map(c=>{
+    const rate=rateDe(c); const base=c.baseNaHora||baseline(c.pessoa,c.op);
+    const opNome=(S.operacoes.find(o=>o.id===c.op)||{}).nome||c.op;
+    return '<div class="card alertbox"><b>'+c.pessoa+' · '+opNome+'</b> · OP '+c.ordem+' Pct '+c.pacote+' ('+c.qtd+' pçs) em '+fmtData(c.ini)+
+    '<div class="mini-info" style="margin:6px 0;">Registrado: <b>'+Math.round(rate)+' pçs/h</b> · média histórica: <b>'+Math.round(base)+' pçs/h</b>. Provável esquecimento de bip ou pausa não registrada.</div>'+
+    '<div style="display:flex; gap:8px; flex-wrap:wrap;">'+
+    '<button class="acao mini" onclick="resolver(\''+c.id+'\',\'aceito\')">Aceitar como real</button>'+
+    '<button class="acao mini sec" onclick="editarCiclo(\''+c.id+'\')">Corrigir horários</button>'+
+    '<button class="acao mini sec" onclick="resolver(\''+c.id+'\',\'media\')">Usar média ('+Math.round(base)+')</button>'+
+    '</div></div>';
+  }).join('');
+}
+function resolver(id, modo){
+  const c=S.ciclos.find(x=>x.id===id); if(!c) return;
+  if(modo==='media'){ c.rateEfetivo=c.baseNaHora||baseline(c.pessoa,c.op); c.resolucao='media'; }
+  else { c.rateEfetivo=rateDe(c); c.resolucao='aceito'; }
+  salvarTudo(); renderTudo();
+}
+
+/* ================= AJUSTES ================= */
+function preencherCfg(){
+  document.getElementById('cfgIni').value=S.cfg.ini;
+  document.getElementById('cfgFim').value=S.cfg.fim;
+  document.getElementById('cfgFimSex').value=S.cfg.fimSex;
+  document.getElementById('cfgCafeIni').value=S.cfg.cafeIni;
+  document.getElementById('cfgCafeFim').value=S.cfg.cafeFim;
+  document.getElementById('cfgCafeTol').value=S.cfg.cafeTol;
+  document.getElementById('cfgTroca').value=S.cfg.troca;
+  document.getElementById('cfgAnom').value=S.cfg.anom;
+}
+function salvarCfg(){
+  S.cfg={ini:cfgIni.value, fim:cfgFim.value, fimSex:cfgFimSex.value, cafeIni:cfgCafeIni.value, cafeFim:cfgCafeFim.value,
+    cafeTol:Number(cfgCafeTol.value), troca:Number(cfgTroca.value), anom:Number(cfgAnom.value)};
+  salvarTudo(); alert('Regras salvas.');
+}
+function addPessoa(){
+  const n=document.getElementById('novaPessoa').value.trim(); if(!n) return;
+  const id=n.toUpperCase().normalize('NFD').replace(/[^A-Z0-9]/g,'');
+  if(S.pessoas.some(p=>p.id===id)) return alert('Já existe.');
+  S.pessoas.push({id, nome:n}); document.getElementById('novaPessoa').value='';
+  salvarTudo(); renderTudo();
+}
+function addOperacao(){
+  const n=document.getElementById('novaOpNome').value.trim();
+  const metas=[m70.value,m80.value,m90.value,m100.value].map(Number);
+  if(!n||metas.some(x=>!x)) return alert('Preencha nome e as 4 metas.');
+  const id=n.toUpperCase().normalize('NFD').replace(/[^A-Z0-9]/g,'');
+  if(S.operacoes.some(o=>o.id===id)) return alert('Já existe.');
+  S.operacoes.push({id, nome:n, metas});
+  document.getElementById('novaOpNome').value=''; m70.value=m80.value=m90.value=m100.value='';
+  salvarTudo(); renderTudo();
+}
+function renderAjustes(){
+  document.getElementById('listaPessoas').innerHTML=S.pessoas.map(p=>'<span class="chip">'+p.nome+'</span>').join('');
+  document.getElementById('tabOperacoes').innerHTML='<tr><th>Operação</th><th>70%</th><th>80%</th><th>90%</th><th>100%</th></tr>'+
+    S.operacoes.map(o=>'<tr><td><b>'+o.nome+'</b></td><td>'+o.metas.join('</td><td>')+'</td></tr>').join('');
+  const sel=document.getElementById('fPessoa');
+  sel.innerHTML='<option value="">Todas</option>'+S.pessoas.map(p=>'<option value="'+p.id+'">'+p.nome+'</option>').join('');
+  const ex=document.getElementById('exPessoa'); const atual=ex.value;
+  ex.innerHTML=S.pessoas.map(p=>'<option value="'+p.id+'">'+p.nome+'</option>').join('');
+  if(atual) ex.value=atual;
+}
+
+/* ================= SIMULAÇÃO ================= */
+function renderSimu(){
+  document.getElementById('simPessoas').innerHTML=S.pessoas.map(p=>'<span class="chip" onclick="bip(\'C|'+p.id+'\')">'+p.nome+'</span>').join('');
+  document.getElementById('simOps').innerHTML=S.operacoes.map(o=>'<span class="chip dour" onclick="bip(\'O|'+o.id+'\')">'+o.nome+'</span>').join('');
+  let pcts='';
+  S.ordens.forEach(o=> o.tamanhos.forEach(t=> t.pacotes.forEach(p=>{
+    pcts+='<span class="chip" onclick="bip(\'K|'+o.num+'|'+t.tam+'|'+p.n+'|'+p.qtd+'\')">OP '+o.num+' '+t.tam+'-'+p.n+' ('+p.qtd+')</span>';
+  })));
+  document.getElementById('simPacotes').innerHTML=pcts||'<span class="mini-info">Cadastre uma OP na aba OPs & Etiquetas.</span>';
+}
+
+function baixarBackup(){
+  const blob=new Blob([JSON.stringify(S)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='backup-borinelli-'+new Date().toISOString().slice(0,10)+'.json'; a.click();
+}
+function restaurarBackup(inp){
+  const f=inp.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ try{ S=JSON.parse(r.result); salvarTudo(); renderTudo(); preencherCfg(); alert('Backup restaurado.'); }catch(e){ alert('Arquivo inválido.'); } };
+  r.readAsText(f);
+}
+/* ================= NAVEGAÇÃO / RENDER ================= */
+document.querySelectorAll('nav button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));
+    document.querySelectorAll('.tela').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    document.getElementById('t-'+b.dataset.t).classList.add('on');
+    if(b.dataset.t==='bip') focarBip();
+    renderTudo();
+  });
+});
+function renderTudo(){ renderSaida(); renderPainel(); renderOps(); renderHist(); renderAlertas(); renderAjustes(); renderSimu(); }
+setInterval(()=>{ document.getElementById('relogio').textContent=new Date().toLocaleTimeString('pt-BR'); }, 1000);
+setInterval(()=>{ if(document.querySelector('#t-painel.on')) renderPainel(); }, 30000);
+carregar();
+</script>
+</body>
+</html>
