@@ -14,6 +14,7 @@ if('serviceWorker' in navigator && location.protocol.startsWith('http')){
 </script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <style>
@@ -106,6 +107,32 @@ td{padding:8px 6px; border-bottom:1px solid var(--linha); vertical-align:middle;
 .okpill{color:var(--f-90); font-weight:800;} .abxpill{color:var(--f-abx); font-weight:800;}
 canvas.graf{width:100%; max-width:760px; background:#fff; border:1px solid var(--linha); border-radius:10px;}
 .pgrid{display:grid; grid-template-columns:1.25fr 1fr; gap:16px; align-items:start;}
+/* ------ MODAIS DE CONFIRMAÇÃO E RESOLUÇÃO ------ */
+.bmodal{position:fixed; inset:0; background:rgba(34,48,28,.62); z-index:80; display:none; align-items:flex-start; justify-content:center; overflow:auto; padding:14px;}
+.bmodal.on{display:flex;}
+.bmodal .caixa{background:var(--creme); border:2px solid var(--verde); border-radius:16px; max-width:560px; width:100%; margin-top:4vh; overflow:hidden; box-shadow:0 14px 50px rgba(0,0,0,.35);}
+.bmodal .topo{background:var(--verde); color:var(--creme); padding:14px 18px;}
+.bmodal .topo .tt{font-family:var(--fonte-display); letter-spacing:.1em; text-transform:uppercase; font-size:1.05rem;}
+.bmodal .topo .st{font-size:.6rem; letter-spacing:.4em; color:var(--dourado); text-transform:uppercase;}
+.bmodal .corpo{padding:16px 18px;}
+.conf-nome{font-size:1.35rem; font-weight:900; color:var(--verde); text-transform:uppercase;}
+.conf-op{font-weight:700; color:var(--sub); margin-top:2px;}
+.conf-pk{margin-top:10px; font-size:1.05rem;}
+.conf-nums{display:flex; gap:18px; flex-wrap:wrap; margin-top:14px;}
+.conf-nums .num b{display:block; font-size:1.5rem; font-variant-numeric:tabular-nums; color:var(--verde);}
+.conf-nums .num span{font-size:.62rem; text-transform:uppercase; letter-spacing:.07em; color:var(--sub);}
+.conf-aviso{border-left:5px solid var(--dourado); background:#fdf8ee; padding:8px 12px; border-radius:8px; margin-top:8px; font-size:.9rem;}
+.conf-aviso.tam{border-left-color:var(--f-abx); background:#fdf3f1; font-weight:700;}
+.btns-grandes{display:flex; gap:12px; padding:14px 18px 18px;}
+.btn-g{flex:1; padding:18px 10px; font-size:1.15rem; font-weight:800; border-radius:12px; border:none; cursor:pointer; font-family:var(--fonte-gothic);}
+.btn-g.ok{background:var(--verde); color:#fff;}
+.btn-g.no{background:#fff; color:var(--f-abx); border:2px solid var(--f-abx);}
+.lac-btns{display:flex; flex-direction:column; gap:10px; margin-top:14px;}
+.lac-btns .btn-g{text-align:left; padding:16px 14px; font-size:1rem;}
+.lac-btns .btn-g.b1{background:#fff; color:var(--verde); border:2px solid var(--verde);}
+.lac-btns .btn-g.b2{background:var(--verde); color:#fff;}
+.lac-btns .btn-g.b3{background:#fff; color:#8a6c47; border:2px solid var(--dourado);}
+.lac-btns .btn-g.b4{background:#fff; color:var(--sub); border:2px solid var(--linha);}
 @media (max-width:900px){ .pgrid{grid-template-columns:1fr;} }
 /* ------ MODO TV ------ */
 body.tv #sidebar, body.tv #btnMenu{display:none;}
@@ -125,9 +152,33 @@ body.tv .pcard .nome{font-size:1.25rem;} body.tv table{font-size:.95rem;} body.t
   table{font-size:.78rem;} th,td{padding:6px 4px;}
   .bip-zona .msg{font-size:1.05rem;}
 }
+.login-ov{position:fixed; inset:0; z-index:200; background:linear-gradient(160deg,var(--verde-esc),var(--verde)); display:flex; align-items:center; justify-content:center; padding:20px;}
+.login-card{background:var(--creme); border-radius:18px; padding:28px 24px; width:100%; max-width:340px; box-shadow:0 20px 60px rgba(0,0,0,.4); border:2px solid var(--dourado);}
+.login-logo{text-align:center; font-weight:900; font-size:1.6rem; letter-spacing:.12em; color:var(--verde);}
+.login-logo span{display:block; font-size:.62rem; letter-spacing:.34em; color:var(--dourado); font-weight:800; margin-top:2px;}
+.login-sub{text-align:center; color:var(--sub); font-size:.78rem; margin:4px 0 18px;}
+.login-card label{display:block; font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; color:var(--sub); font-weight:700; margin:10px 0 3px;}
+.login-card input{width:100%; box-sizing:border-box; padding:11px 12px; border-radius:10px; border:1.5px solid #d8d2be; font-size:1rem;}
+.login-card .acao{width:100%; margin-top:18px; padding:12px; font-size:1rem;}
+.login-erro{color:#b23b3b; font-size:.82rem; font-weight:700; margin-top:10px; min-height:1em; text-align:center;}
+#sbUser{margin-top:auto; padding:8px 10px; text-align:center; font-size:.74rem; color:rgba(246,253,235,.8); border-top:1px solid rgba(246,253,235,.15);}
+#sbUser button{margin-top:5px; background:transparent; border:1px solid rgba(246,253,235,.4); color:var(--creme); border-radius:8px; padding:4px 12px; font-size:.72rem; cursor:pointer; font-weight:700;}
+nav button.oculto{display:none;}
 </style>
 </head>
 <body>
+<div id="loginOverlay" class="login-ov">
+  <div class="login-card">
+    <div class="login-logo">BORINELLI<span>CONFECÇÕES</span></div>
+    <div class="login-sub">Sistema de Produção</div>
+    <label>Usuário</label>
+    <input id="loginUser" autocomplete="username" autocapitalize="none">
+    <label>Senha</label>
+    <input id="loginPass" type="password" autocomplete="current-password">
+    <div id="loginErro" class="login-erro"></div>
+    <button class="acao" id="btnLogin" onclick="fazerLogin()">Entrar</button>
+  </div>
+</div>
 <button id="btnMenu" onclick="alternarMenu()" title="Abrir/fechar menu">☰</button>
 <div id="tvBar">
   <div class="tvtit">Ao Vivo · Produção<small>BORINELLI CONFECÇÕES</small></div>
@@ -150,7 +201,8 @@ body.tv .pcard .nome{font-size:1.25rem;} body.tv table{font-size:.95rem;} body.t
     <button data-t="ajustes">⚙️ Ajustes</button>
   </nav>
   <div id="syncStatus" style="padding:4px 10px 0; text-align:center; font-size:.72rem; font-weight:700;">● conectando...</div>
-  <div id="sbVersao" style="margin-top:auto; padding:6px 10px 10px; text-align:center; color:rgba(246,253,235,.55); font-size:.7rem;"></div>
+  <div id="sbUser"></div>
+  <div id="sbVersao" style="padding:6px 10px 10px; text-align:center; color:rgba(246,253,235,.55); font-size:.7rem;"></div>
 </aside>
 <div id="bannerAtualiza" style="display:none; position:fixed; bottom:14px; left:50%; transform:translateX(-50%); z-index:70; background:var(--verde); color:var(--creme); border:2px solid var(--dourado); border-radius:12px; padding:12px 18px; display:none; align-items:center; gap:14px; box-shadow:0 8px 30px rgba(0,0,0,.3);">
   <span>🔄 Nova versão do sistema disponível</span>
@@ -222,6 +274,7 @@ body.tv .pcard .nome{font-size:1.25rem;} body.tv table{font-size:.95rem;} body.t
     <button data-s="envio">💬 Média do dia</button>
     <button data-s="comparativo">⚖️ Comparativo</button>
     <button data-s="calibra">🎯 Calibração</button>
+    <button data-s="ocorr">🧩 Ocorrências</button>
   </div>
   <div class="sub on" id="sub-relat-individual">
     <div class="linhaform">
@@ -248,6 +301,10 @@ body.tv .pcard .nome{font-size:1.25rem;} body.tv table{font-size:.95rem;} body.t
   <div class="sub" id="sub-relat-calibra">
     <div class="card"><div class="mini-info" style="margin-bottom:8px;">Média real de todas as pessoas em cada variação, para você definir metas do que ainda não tem tabela.</div><table id="tabCalibra"></table></div>
   </div>
+  <div class="sub" id="sub-relat-ocorr">
+    <div class="linhaform"><div><label>Período</label><select id="ocDias"><option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="60">60 dias</option><option value="9999">Tudo</option></select></div><button class="acao" onclick="renderOcorrencias()">Atualizar</button></div>
+    <div id="ocorrOut"></div>
+  </div>
 </section>
 
 <!-- ============ OPS ============ -->
@@ -257,6 +314,7 @@ body.tv .pcard .nome{font-size:1.25rem;} body.tv table{font-size:.95rem;} body.t
     <h2 style="margin-top:0;">Cadastrar OP</h2>
     <div class="linhaform">
       <div><label>Nº da OP</label><input id="opNum" placeholder="1245" style="width:100px;"></div>
+      <div><label>Cliente</label><input id="opCliente" list="clientesList" placeholder="Daros, Arg Aba..." style="width:150px;"><datalist id="clientesList"></datalist></div>
       <div><label>Marca</label><select id="opMarca" onchange="aplicarMarca()"><option value="">Sem marca</option></select></div>
       <div><label>Entrada</label><input id="opEntrada" type="date"></div>
       <div><label>Previsão de saída (dia/mês)</label><input id="opPrazo" placeholder="15/07" style="width:110px;" maxlength="5"></div>
@@ -331,12 +389,30 @@ body.tv .pcard .nome{font-size:1.25rem;} body.tv table{font-size:.95rem;} body.t
   </div>
   <div class="sub" id="sub-aj-sistema">
   <div class="card">
-    <h2 style="margin-top:0;">Senha do gestor</h2>
-    <div class="mini-info" style="margin-bottom:8px;">Com a senha definida, alterar ou excluir OPs, marcas, metas, regras e registros exige autorização. Bipagem e consultas continuam livres.</div>
+    <h2 style="margin-top:0;">Acesso do gestor (você)</h2>
+    <div class="mini-info" style="margin-bottom:8px;">Controle total do sistema. Guarde bem essa senha.</div>
     <div class="linhaform">
-      <div><label>Nova senha</label><input id="pinNovo" type="password" placeholder="****" style="width:130px;"></div>
-      <button class="acao" onclick="definirPin()">Salvar senha</button>
+      <div><label>Usuário</label><input id="acAdminUser" style="width:150px;"></div>
+      <div><label>Senha</label><input id="acAdminPass" type="text" style="width:130px;"></div>
     </div>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0;">Acesso da operadora</h2>
+    <div class="mini-info" style="margin-bottom:8px;">Login separado só pra trabalhar. Por padrão consegue bipar e ver o Ao Vivo (que já mostra a sequência de cada peça). Não cria nem altera nada. Vá liberando as telas abaixo conforme for ensinando.</div>
+    <div class="linhaform">
+      <div><label>Usuário</label><input id="acOpUser" style="width:150px;"></div>
+      <div><label>Senha</label><input id="acOpPass" type="text" style="width:130px;"></div>
+    </div>
+    <label style="display:block; margin:12px 0 6px; font-weight:800;">Telas liberadas pra operadora</label>
+    <div id="acPerms" style="display:flex; flex-direction:column; gap:8px;">
+      <label style="display:flex; align-items:center; gap:8px; font-weight:600;"><input type="checkbox" id="perm-relat"> Relatórios</label>
+      <label style="display:flex; align-items:center; gap:8px; font-weight:600;"><input type="checkbox" id="perm-ops"> OPs &amp; Etiquetas (ver a sequência e imprimir etiquetas)</label>
+      <label style="display:flex; align-items:center; gap:8px; font-weight:600;"><input type="checkbox" id="perm-hist"> Histórico</label>
+      <label style="display:flex; align-items:center; gap:8px; font-weight:600;"><input type="checkbox" id="perm-alertas"> Alertas</label>
+      <label style="display:flex; align-items:center; gap:8px; font-weight:600;"><input type="checkbox" id="perm-entrada"> Modo entrada de pacotes</label>
+    </div>
+    <div class="mini-info" style="margin-top:8px;">Marcas e Ajustes ficam sempre só com você. Mesmo com uma tela liberada, a operadora só vê, não consegue criar, editar nem excluir.</div>
+    <button class="acao" onclick="salvarAcesso()" style="margin-top:12px;">Salvar acesso e permissões</button>
   </div>
   </div>
   <div class="sub on" id="sub-aj-regras">
@@ -356,6 +432,7 @@ body.tv .pcard .nome{font-size:1.25rem;} body.tv table{font-size:.95rem;} body.t
       <div><label>Tempo de troca (min)</label><input id="cfgTroca" type="number" style="width:90px;"></div>
       <div><label>Anomalia se fora de (%)</label><input id="cfgAnom" type="number" style="width:90px;"></div>
       <div><label>Fila baixa se menor que (pçs)</label><input id="cfgFila" type="number" style="width:110px;"></div>
+      <div><label>Pacote parado se passar de (min)</label><input id="cfgEmpac" type="number" style="width:140px;"></div>
       <button class="acao" onclick="salvarCfg()">Salvar regras</button>
     </div>
   </div>
@@ -418,6 +495,22 @@ body.tv .pcard .nome{font-size:1.25rem;} body.tv table{font-size:.95rem;} body.t
       <button class="acao mini sec" style="background:transparent; color:#fff; border-color:rgba(255,255,255,.4);" onclick="fichaModal.style.display='none'">✕ Fechar</button>
     </div>
     <div style="padding:16px 18px;" id="fichaCorpo"></div>
+  </div>
+</div>
+<div class="bmodal" id="confModal">
+  <div class="caixa">
+    <div class="topo"><div class="tt">Confirmar registro</div><div class="st">BORINELLI · PRODUÇÃO</div></div>
+    <div class="corpo" id="confCorpo"></div>
+    <div class="btns-grandes">
+      <button class="btn-g no" onclick="cancelarCiclo()">✕ Cancelar</button>
+      <button class="btn-g ok" onclick="confirmarCiclo()">✓ Confirmar</button>
+    </div>
+  </div>
+</div>
+<div class="bmodal" id="lacModal">
+  <div class="caixa">
+    <div class="topo"><div class="tt">Operação não registrada</div><div class="st">BORINELLI · PRODUÇÃO</div></div>
+    <div class="corpo" id="lacCorpo"></div>
   </div>
 </div>
 <div id="flash" onclick="this.className=''"></div>
@@ -508,6 +601,7 @@ const CFG_PADRAO = {ini:'05:00', fim:'14:30', fimSex:'13:30', cafeIni:'08:30', c
 
 let S = {cfg:{...CFG_PADRAO}, pessoas:PESSOAS_PADRAO, opsBase:OPS_BASE, metasVar:{}, baselines:BASELINES_PADRAO, marcas:[], ordens:[], ciclos:[]};
 let sel=null, pendingBase=null, pendingPacote=null, pendingTs=0, entradaMode=false;
+let travaBip=false, propostaAtual=null, lacPendente=null;
 let seqTemp=[], seqTempM=[], tamsTempArr=[];
 
 /* ================= FIREBASE / SINCRONIZAÇÃO ================= */
@@ -521,27 +615,33 @@ const firebaseConfig = {
   appId: "1:508417981257:web:0268f6235838be2605b898"
 };
 let fbDB=null, fbOnline=false, aplicandoRemoto=false, ultimoEnvio=0;
+function ligarBanco(){
+  if(fbDB) return; // já ligado
+  fbDB=firebase.database();
+  const ref=fbDB.ref('estado');
+  // status de conexão
+  fbDB.ref('.info/connected').on('value', s=>{ fbOnline=!!s.val(); pintarStatusSync(); });
+  // ouvir mudanças remotas
+  ref.on('value', snap=>{
+    const v=snap.val();
+    if(!v || !v.dados) return;
+    if(v.origem===meuId) return; // eco do meu próprio envio
+    try{
+      const d=JSON.parse(v.dados);
+      aplicandoRemoto=true;
+      S=Object.assign(S,d);
+      aplicandoRemoto=false;
+      gravarLocal(JSON.stringify(S));
+      renderTudo(); preencherCfg();
+    }catch(e){ aplicandoRemoto=false; }
+  });
+}
 function iniciarFirebase(){
   try{
     firebase.initializeApp(firebaseConfig);
-    fbDB=firebase.database();
-    const ref=fbDB.ref('estado');
-    // status de conexão
-    fbDB.ref('.info/connected').on('value', s=>{ fbOnline=!!s.val(); pintarStatusSync(); });
-    // ouvir mudanças remotas
-    ref.on('value', snap=>{
-      const v=snap.val();
-      if(!v || !v.dados) return;
-      if(v.origem===meuId) return; // eco do meu próprio envio
-      try{
-        const d=JSON.parse(v.dados);
-        aplicandoRemoto=true;
-        S=Object.assign(S,d);
-        aplicandoRemoto=false;
-        gravarLocal(JSON.stringify(S));
-        renderTudo(); preencherCfg();
-      }catch(e){ aplicandoRemoto=false; }
-    });
+    // autentica sozinho (anônimo). Só liga o banco depois de autenticar.
+    firebase.auth().onAuthStateChanged(user=>{ if(user) ligarBanco(); });
+    firebase.auth().signInAnonymously().catch(e=>{ console.error('Autenticação falhou', e); pintarStatusSync(); });
   }catch(e){ console.error('Firebase falhou', e); }
 }
 const meuId = 'ap-'+Math.random().toString(36).slice(2,9);
@@ -577,7 +677,8 @@ async function carregar(){
   // migrações
   if(!S.opsBaseRev || S.opsBaseRev < 4){ S.opsBase = OPS_BASE; S.opsBaseRev = 4; }
   S.marcas=S.marcas||[]; S.metasVar=S.metasVar||{};
-  (S.ordens||[]).forEach(o=>{ o.etapas=o.etapas||[]; o.externos=o.externos||[]; o.chegadas=o.chegadas||[]; });
+  (S.ordens||[]).forEach(o=>{ o.etapas=o.etapas||[]; o.externos=o.externos||[]; o.chegadas=o.chegadas||[]; o.resolvidos=o.resolvidos||[]; });
+  if(S.cfg.empacadoMin===undefined) S.cfg.empacadoMin=45;
   (S.ciclos||[]).forEach(c=>{ if(!c.opKey) c.opKey=c.op; if(!c.rotulo) c.rotulo=(S.opsBase.find(x=>x.id===c.op)||{}).nome||c.op; if(c.etapaIdx===undefined) c.etapaIdx=-1; });
   fecharDiasAnteriores();
   renderTudo(); preencherCfg();
@@ -660,6 +761,7 @@ function pecasChegadas(o){
   return s;
 }
 function alternarEntrada(){
+  if(!temPermissao('entrada')) return flash(false,'Sem permissão','A entrada de pacotes é liberada pelo gestor');
   entradaMode=!entradaMode;
   pendingPacote=null; pendingBase=null;
   const btn=document.getElementById('btnEntrada');
@@ -676,53 +778,201 @@ function registrarEntrada(num,tam,nPac,qtd){
   flash(true,'Entrada: OP '+num+' · '+tam+'-'+nPac+' ('+qtd+' pçs)', o.chegadas.length+' de '+totPct+' pacotes na célula');
   salvarTudo(); renderTudo();
 }
-function iniciarCiclo(pessoaId, pk){
+/* ---- trava anti-releitura / câmera ---- */
+function pausarCam(){ try{ if(cam && camLendo && cam.pause) cam.pause(true); }catch(e){} }
+function retomarCam(){ try{ if(cam && camLendo && cam.resume) cam.resume(); }catch(e){} }
+function mostrarModal(id){
+  ['confModal','lacModal'].forEach(m=>{ const el=document.getElementById(m); if(el) el.classList.toggle('on', m===id); });
+  travaBip=true; pausarCam();
+}
+function ocultarModais(){
+  const a=document.getElementById('confModal'), b=document.getElementById('lacModal');
+  if(a) a.classList.remove('on'); if(b) b.classList.remove('on');
+  travaBip=false; retomarCam();
+}
+function limparPend(){ pendingBase=null; pendingPacote=null; }
+
+/* ---- resolução de etapa por pacote ---- */
+function etapaResolvidaPacote(o,tam,n,idx){
+  return (o.resolvidos||[]).some(r=>r.tam===tam && String(r.n)===String(n) && r.etapaIdx===idx && (r.tipo==='fora'||r.tipo==='naoleva'||r.tipo==='aqui'));
+}
+function etapaOkPacote(o,tam,n,idx){
+  return pacoteConcluido(o.num,tam,n,idx) || etapaEmAndamento(o.num,tam,n,idx) || etapaResolvidaPacote(o,tam,n,idx);
+}
+function primeiroGap(o,tam,n,ateIdx){
+  for(let j=0;j<ateIdx;j++){ if(!etapaOkPacote(o,tam,n,j)) return j; }
+  return -1;
+}
+
+/* ---- monta a proposta e abre a confirmação (não grava nada ainda) ---- */
+function proporCiclo(pessoaId, pk){
   const agora=Date.now();
   const pessoa=S.pessoas.find(x=>x.id===pessoaId);
+  if(!pessoa){ flash(false,'Crachá não reconhecido',''); return; }
   const {num,tam,nPac,qtd}=pk;
   const o=S.ordens.find(x=>x.num===num);
-  let etapaIdx=-1, opKey, rotulo;
+  let etapaIdx=-1, opKey, rotulo, base;
+
   if(o && o.etapas.length){
-    if(!pacoteChegou(o,tam,nPac)) o.chegadas.push({tam, n:nPac, ts:agora}); // entrada implícita
     if(pendingBase){
       etapaIdx=o.etapas.findIndex((e,i)=> e.base===pendingBase && !pacoteConcluido(num,tam,nPac,i));
       if(etapaIdx<0) etapaIdx=o.etapas.findIndex(e=>e.base===pendingBase);
-      if(etapaIdx<0){ opKey=pendingBase; rotulo=(S.opsBase.find(x=>x.id===pendingBase)||{}).nome; }
+      if(etapaIdx<0){ opKey=pendingBase; base=pendingBase; rotulo=(S.opsBase.find(x=>x.id===pendingBase)||{}).nome||pendingBase; }
     } else {
       etapaIdx=proximaEtapa(o,tam,nPac);
-      if(etapaIdx<0){ flash(false,'Pacote já concluído','Todas as operações deste pacote estão feitas. Use um cartão de operação se for refazer.'); return false; }
+      if(etapaIdx<0){ flash(false,'Pacote já concluído','Todas as operações deste pacote estão feitas. Use um cartão de operação se for refazer.'); limparPend(); return; }
     }
-    if(etapaIdx>=0){ const e=o.etapas[etapaIdx]; opKey=e.key; rotulo=e.rotulo; }
+    if(etapaIdx>=0){ const e=o.etapas[etapaIdx]; opKey=e.key; rotulo=e.rotulo; base=e.base; }
   } else {
-    const b=pendingBase || (S.ciclos.filter(c=>c.pessoa===pessoaId).slice(-1)[0]||{}).op;
-    if(!b){ flash(false,'Falta a operação','Bipe o cartão da operação junto'); return false; }
-    opKey=b; rotulo=(S.opsBase.find(x=>x.id===b)||{}).nome||b;
+    base=pendingBase || (S.ciclos.filter(c=>c.pessoa===pessoaId).slice(-1)[0]||{}).op;
+    if(!base){ flash(false,'Falta a operação','Bipe o cartão da operação junto'); return; }
+    opKey=base; rotulo=(S.opsBase.find(x=>x.id===base)||{}).nome||base;
   }
-  // bip repetido: mesma pessoa, mesmo pacote, há pouco tempo
-  const proprio=ciclosAbertos(pessoaId)[0];
-  if(proprio && proprio.ordem===num && proprio.tam===tam && String(proprio.pacote)===String(nPac) && (agora-proprio.ini)<5*60000){
-    flash(true,'Bip repetido ignorado', pessoa.nome+' já está nesse pacote'); return false;
+
+  // TRAVA: pacote nas mãos de alguém na MESMA etapa = recusa; etapa diferente = repasse válido
+  let repasseDe=null, fecharAoConfirmar=null;
+  const aberto=S.ciclos.find(c=>!c.fim && c.ordem===num && c.tam===tam && String(c.pacote)===String(nPac));
+  if(aberto){
+    if(aberto.pessoa===pessoaId){ flash(true,'Bip repetido ignorado', pessoa.nome+' já está nesse pacote'); limparPend(); return; }
+    const nomeOutro=(S.pessoas.find(x=>x.id===aberto.pessoa)||{}).nome||aberto.pessoa;
+    const mesmaEtapa = (etapaIdx>=0 && etapaIdx===aberto.etapaIdx) || (etapaIdx<0 && base===aberto.op);
+    if(mesmaEtapa){ flash(false,'Pacote em outras mãos','Pacote '+nPac+' está com '+nomeOutro+' na mesma operação. Recusado.'); limparPend(); return; }
+    repasseDe=nomeOutro; fecharAoConfirmar=aberto.id;
   }
-  // pacote nas mãos de outra pessoa: FECHA o ciclo dela (repasse pela distribuição)
-  const outro=S.ciclos.find(c=>!c.fim && c.pessoa!==pessoaId && c.ordem===num && c.tam===tam && String(c.pacote)===String(nPac));
-  if(outro){
-    fecharCiclo(outro, agora, 'bip');
-    const nomeOutro=(S.pessoas.find(x=>x.id===outro.pessoa)||{}).nome||outro.pessoa;
-    flash(true,'Fechado: '+nomeOutro+' · '+outro.rotulo, qtdEfetiva(outro)+' pçs registradas. Passando pra '+pessoa.nome+'...');
+
+  // FLUXO OBRIGATÓRIO: etapa pulada abre a resolução antes de propor
+  if(o && o.etapas.length && etapaIdx>=0){
+    const gap=primeiroGap(o,tam,nPac,etapaIdx);
+    if(gap>=0){ abrirLacuna('sequencia', o, gap, {num,tam,nPac,qtd,pessoaId, alvo:rotulo}); return; }
   }
-  // fecha o ciclo aberto da própria pessoa (troca de pacote)
+
+  // acumulado do dia nessa operação (inclui o ciclo aberto que vai fechar por troca)
+  const hoje=new Date().toDateString();
+  const doDiaOp=S.ciclos.filter(c=>c.pessoa===pessoaId && c.opKey===opKey && new Date(c.ini).toDateString()===hoje && !(c.ordem===num && c.tam===tam && String(c.pacote)===String(nPac)));
+  const acumTotal=doDiaOp.reduce((s,c)=>s+qtdEfetiva(c),0) + Number(qtd);
+  const media=baseline(pessoaId,opKey);
+  const minPeca = media? 60/media : null;
+  const etaTxt = media? fmtHora(agora + Number(qtd)/media*3600000) : '—';
+  // mistura de tamanho: última vez da pessoa nessa operação hoje com tamanho diferente
+  const ultDaOp=S.ciclos.filter(c=>c.pessoa===pessoaId && c.opKey===opKey && new Date(c.ini).toDateString()===hoje).slice(-1)[0];
+  const tamAnterior = ultDaOp? ultDaOp.tam : null;
+  const trocaTam = tamAnterior && tamAnterior!==tam;
+
+  propostaAtual={pessoaId, pessoaNome:pessoa.nome, num, tam, nPac, qtd:Number(qtd), opKey, base, rotulo,
+    rotuloCurto:(S.opsBase.find(x=>x.id===base)||{}).nome||rotulo, etapaIdx, acumTotal, media, minPeca, etaTxt,
+    trocaTam, tamAnterior, repasseDe, fecharAoConfirmar};
+  document.getElementById('confCorpo').innerHTML=montarConfCorpo(propostaAtual);
+  mostrarModal('confModal');
+}
+function montarConfCorpo(p){
+  let h='';
+  h+='<div class="conf-nome">'+p.pessoaNome+'</div>';
+  h+='<div class="conf-op">'+p.rotulo+'</div>';
+  h+='<div class="conf-pk">OP <b>'+p.num+'</b> · Tam <b>'+p.tam+'</b> · Pacote <b>'+p.nPac+'</b> · <b>'+p.qtd+'</b> peças</div>';
+  h+='<div class="conf-nums">'+
+     '<div class="num"><b>'+p.acumTotal+'</b><span>acumulado hoje · '+p.rotuloCurto+'</span></div>'+
+     '<div class="num"><b>'+(p.media?Math.round(p.media):'—')+'</b><span>média pçs/h</span></div>'+
+     '<div class="num"><b>'+(p.minPeca?p.minPeca.toFixed(2).replace('.',','):'—')+'</b><span>min por peça</span></div>'+
+     '<div class="num"><b>'+p.etaTxt+'</b><span>previsão término</span></div></div>';
+  if(p.repasseDe) h+='<div class="conf-aviso">↪ Repasse: ao confirmar, fecha o ciclo de <b>'+p.repasseDe+'</b> neste pacote e credita o tempo dele(a).</div>';
+  if(p.trocaTam) h+='<div class="conf-aviso tam">⚠️ Trocando de tamanho: estava em '+p.tamAnterior+', este é '+p.tam+'.</div>';
+  return h;
+}
+function confirmarCiclo(){
+  const p=propostaAtual; if(!p){ ocultarModais(); return; }
+  const agora=Date.now();
+  const o=S.ordens.find(x=>x.num===p.num);
+  if(o && !pacoteChegou(o,p.tam,p.nPac)) o.chegadas.push({tam:p.tam, n:p.nPac, ts:agora}); // entrada implícita
+  // repasse: fecha o ciclo de quem estava com o pacote na etapa anterior
+  if(p.fecharAoConfirmar){
+    const outro=S.ciclos.find(c=>c.id===p.fecharAoConfirmar && !c.fim);
+    if(outro) fecharCiclo(outro, agora, 'bip');
+  }
+  // troca de pacote: fecha o ciclo aberto da própria pessoa em outro pacote
+  const proprio=ciclosAbertos(p.pessoaId).find(c=>!(c.ordem===p.num && c.tam===p.tam && String(c.pacote)===String(p.nPac)));
   if(proprio) fecharCiclo(proprio, agora - S.cfg.troca*60000, 'bip');
-  S.ciclos.push({id:agora+'-'+pessoaId, pessoa:pessoaId, op:(opKey||'').split('|')[0], opKey, rotulo, etapaIdx, ordem:num, tam, pacote:nPac, qtd:Number(qtd), ini:agora, pausas:[]});
-  flash(true, pessoa.nome+' · '+rotulo, 'OP '+num+' · Tam '+tam+' · Pct '+nPac+' · '+qtd+' peças');
-  pendingBase=null; pendingPacote=null;
-  salvarTudo(); renderTudo();
-  return true;
+  S.ciclos.push({id:agora+'-'+p.pessoaId, pessoa:p.pessoaId, op:(p.opKey||'').split('|')[0], opKey:p.opKey, rotulo:p.rotulo,
+    etapaIdx:p.etapaIdx, ordem:p.num, tam:p.tam, pacote:p.nPac, qtd:p.qtd, ini:agora, pausas:[],
+    trocaTam:p.trocaTam? {de:p.tamAnterior, para:p.tam} : null});
+  flash(true, p.pessoaNome+' · '+p.rotulo, 'OP '+p.num+' · '+p.tam+'-'+p.nPac+' · '+p.qtd+' peças · acumulado '+p.acumTotal);
+  propostaAtual=null; limparPend();
+  ocultarModais(); salvarTudo(); renderTudo();
+}
+function cancelarCiclo(){
+  propostaAtual=null; limparPend(); ocultarModais();
+  flash(true,'Cancelado','Nada foi registrado');
+}
+
+/* ---- resolução de etapa que ficou pra trás ---- */
+function abrirLacuna(modo, o, gapIdx, ctx){
+  lacPendente={modo, num:o.num, tam:ctx.tam, nPac:ctx.nPac, qtd:ctx.qtd, gapIdx, pessoaId:ctx.pessoaId, alvo:ctx.alvo||''};
+  renderLacOpcoes();
+  mostrarModal('lacModal');
+}
+function renderLacOpcoes(){
+  const L=lacPendente; if(!L) return;
+  const o=S.ordens.find(x=>x.num===L.num); if(!o) return;
+  const etapa=o.etapas[L.gapIdx];
+  const empac=L.modo==='empacado';
+  let h='<div class="conf-nome">'+(empac?'Pacote parado':'Falta a '+(L.gapIdx+1)+'ª etapa')+'</div>';
+  h+='<div class="conf-op">'+etapa.rotulo+'</div>';
+  h+='<div class="conf-pk">OP <b>'+L.num+'</b> · '+L.tam+'-'+L.nPac+' ('+L.qtd+' pçs). '+
+     (empac? 'Passou da etapa anterior e ninguém pegou esta. O que houve?' : 'Este pacote está indo para <b>'+L.alvo+'</b>, mas a etapa acima não foi registrada.')+'</div>';
+  h+='<div class="lac-btns">'+
+    '<button class="btn-g b1" onclick="lacResolver(\'fora\')">Foi feito FORA da célula<br><small style="font-weight:600;">registra como externo · não conta pra ninguém da célula</small></button>'+
+    '<button class="btn-g b2" onclick="lacEscolherPessoa()">Já foi feito AQUI<br><small style="font-weight:600;">escolher quem fez · credita na média da pessoa</small></button>'+
+    '<button class="btn-g b3" onclick="lacResolver(\'naoleva\')">Esta OP NÃO leva essa etapa<br><small style="font-weight:600;">pula a etapa neste pacote</small></button>'+
+    (empac? '<button class="btn-g b4" onclick="lacSnooze()">Vai voltar pra esta etapa<br><small style="font-weight:600;">deixa em aberto, esconde o aviso por enquanto</small></button>' : '')+
+    '</div>';
+  h+='<div style="margin-top:12px;"><button class="btn-g no" style="width:100%;" onclick="cancelarLacuna()">✕ Cancelar</button></div>';
+  document.getElementById('lacCorpo').innerHTML=h;
+}
+function lacEscolherPessoa(){
+  document.getElementById('lacCorpo').innerHTML=
+    '<div class="conf-nome">Quem fez essa etapa?</div>'+
+    '<div class="chips" style="margin-top:14px;">'+S.pessoas.map(p=>'<span class="chip" onclick="lacResolver(\'aqui\',\''+p.id+'\')">'+p.nome+'</span>').join('')+'</div>'+
+    '<div style="margin-top:16px;"><button class="btn-g no" style="width:100%;" onclick="renderLacOpcoes()">Voltar</button></div>';
+}
+function lacResolver(tipo, pessoaId){
+  const L=lacPendente; if(!L) return;
+  const o=S.ordens.find(x=>x.num===L.num); if(!o) return;
+  o.resolvidos=o.resolvidos||[];
+  const e=o.etapas[L.gapIdx];
+  if(tipo==='fora'){
+    o.resolvidos.push({tam:L.tam, n:L.nPac, etapaIdx:L.gapIdx, tipo:'fora', qtd:Number(L.qtd), quando:Date.now()});
+  } else if(tipo==='naoleva'){
+    o.resolvidos.push({tam:L.tam, n:L.nPac, etapaIdx:L.gapIdx, tipo:'naoleva', qtd:Number(L.qtd), quando:Date.now()});
+  } else if(tipo==='aqui'){
+    const base=baseline(pessoaId, e.key) || (metasDe(e.key)[1]||60);
+    const dur=Math.max(60000, Number(L.qtd)/base*3600000);
+    const fim=Date.now(), ini=fim-dur;
+    S.ciclos.push({id:fim+'-'+pessoaId+'-retro', pessoa:pessoaId, op:e.base, opKey:e.key, rotulo:e.rotulo, etapaIdx:L.gapIdx,
+      ordem:L.num, tam:L.tam, pacote:L.nPac, qtd:Number(L.qtd), ini, fim, pausas:[], rateEfetivo:base, origem:'retro'});
+    o.resolvidos.push({tam:L.tam, n:L.nPac, etapaIdx:L.gapIdx, tipo:'aqui', pessoa:pessoaId, qtd:Number(L.qtd), quando:Date.now()});
+  }
+  const modo=L.modo, pid=L.pessoaId, pk={num:L.num, tam:L.tam, nPac:L.nPac, qtd:L.qtd};
+  lacPendente=null; salvarTudo();
+  if(modo==='sequencia'){ proporCiclo(pid, pk); }   // segue pro próximo gap ou pra confirmação
+  else { ocultarModais(); renderTudo(); flash(true,'Resolvido', e.rotulo+' · OP '+pk.num+' '+pk.tam+'-'+pk.nPac); }
+}
+function lacSnooze(){
+  const L=lacPendente; if(!L) return;
+  const o=S.ordens.find(x=>x.num===L.num); if(!o) return;
+  o.resolvidos=o.resolvidos||[];
+  o.resolvidos.push({tam:L.tam, n:L.nPac, etapaIdx:L.gapIdx, tipo:'snooze', ate:Date.now()+(S.cfg.empacadoMin||45)*60000, quando:Date.now()});
+  lacPendente=null; salvarTudo(); ocultarModais(); renderTudo();
+}
+function cancelarLacuna(){
+  const modo=lacPendente&&lacPendente.modo;
+  lacPendente=null;
+  if(modo==='sequencia'){ limparPend(); ocultarModais(); flash(true,'Cancelado','O pacote não foi registrado. Bipe de novo quando resolver.'); }
+  else ocultarModais();
 }
 function pacoteConcluido(ordem,tam,n,etapaIdx){
   return S.ciclos.some(c=>c.ordem===ordem && c.tam===tam && String(c.pacote)===String(n) && c.etapaIdx===etapaIdx && c.fim);
 }
 function proximaEtapa(o, tam, n){
-  for(let i=0;i<o.etapas.length;i++){ if(!pacoteConcluido(o.num,tam,n,i) && !etapaEmAndamento(o.num,tam,n,i)) return i; }
+  for(let i=0;i<o.etapas.length;i++){ if(!pacoteConcluido(o.num,tam,n,i) && !etapaEmAndamento(o.num,tam,n,i) && !etapaResolvidaPacote(o,tam,n,i)) return i; }
   return -1;
 }
 function etapaEmAndamento(ordem,tam,n,idx){
@@ -738,6 +988,7 @@ function fecharCiclo(c, quando, motivo){
   if(base && (rate<base*(1-lim)||rate>base*(1+lim))){ c.flag='anomalia'; c.baseNaHora=base; }
 }
 function bip(code){
+  if(travaBip) return; // confirmação/resolução aberta: ignora leituras (anti QR vizinho)
   const partes=code.split('|'); const tipo=partes[0].toUpperCase(); const agora=Date.now();
   // buffer de pacote expira em 90s
   if(pendingPacote && agora-pendingTs>90000) pendingPacote=null;
@@ -747,7 +998,7 @@ function bip(code){
     if(entradaMode) alternarEntrada();
     sel=p.id;
     // ordem nova: pacote (e operação) já bipados -> inicia agora
-    if(pendingPacote){ iniciarCiclo(p.id, pendingPacote); return; }
+    if(pendingPacote){ proporCiclo(p.id, pendingPacote); return; }
     const ab=ciclosAbertos(p.id)[0];
     if(ab && ab.pausas && ab.pausas.some(x=>!x.fim)){
       ab.pausas.find(x=>!x.fim).fim=agora;
@@ -763,7 +1014,7 @@ function bip(code){
   else if(tipo==='K'){
     let [_,num,tam,nPac,qtd]=partes; num=limparTexto(num); tam=limparTexto(tam); nPac=limparTexto(nPac);
     if(entradaMode) return registrarEntrada(num,tam,nPac,qtd);
-    if(sel){ iniciarCiclo(sel,{num,tam,nPac,qtd}); return; }
+    if(sel){ proporCiclo(sel,{num,tam,nPac,qtd}); return; }
     pendingPacote={num,tam,nPac,qtd}; pendingTs=agora;
     flash(true,'Pacote: OP '+num+' · '+tam+'-'+nPac+' ('+qtd+' pçs)','Agora bipe o crachá de quem vai fazer (ou a operação antes, se for fora da sequência)');
   }
@@ -796,25 +1047,87 @@ function flash(ok,g,p){
   bipMsg.textContent=g; bipDet.textContent=p;
 }
 
-/* ================= SENHA DO GESTOR ================= */
+/* ================= ACESSO E PERFIS ================= */
 function limparTexto(s){ return String(s||'').replace(/[<>"`]/g,'').trim(); }
-function definirPin(){
-  if(S.cfg.pin){
-    const atual=prompt('Digite a senha atual:');
-    if(atual!==S.cfg.pin) return alert('Senha atual incorreta.');
+let perfilAtivo=null;
+function acessoCfg(){
+  if(!S.cfg.acesso) S.cfg.acesso={};
+  const a=S.cfg.acesso;
+  if(!a.adminUser) a.adminUser='patrick';
+  if(!a.adminPass) a.adminPass='2310';
+  if(!a.opUser) a.opUser='costura';
+  if(!a.opPass) a.opPass='1234';
+  if(!a.perms) a.perms={relat:false, ops:false, hist:false, alertas:false, entrada:false};
+  return a;
+}
+function fazerLogin(){
+  const a=acessoCfg();
+  const u=(loginUser.value||'').trim().toLowerCase();
+  const p=(loginPass.value||'').trim();
+  let papel=null;
+  if(u===String(a.adminUser).toLowerCase() && p===String(a.adminPass)) papel='admin';
+  else if(u===String(a.opUser).toLowerCase() && p===String(a.opPass)) papel='operador';
+  if(!papel){ loginErro.textContent='Usuário ou senha incorretos.'; return; }
+  loginErro.textContent=''; loginPass.value='';
+  perfilAtivo=papel;
+  try{ localStorage.setItem('perfilBorinelli', papel); }catch(e){}
+  document.getElementById('loginOverlay').style.display='none';
+  aplicarPerfil();
+}
+function sair(){
+  perfilAtivo=null;
+  try{ localStorage.removeItem('perfilBorinelli'); }catch(e){}
+  loginUser.value=''; loginPass.value=''; loginErro.textContent='';
+  document.getElementById('loginOverlay').style.display='flex';
+}
+function restaurarPerfil(){
+  let p=null; try{ p=localStorage.getItem('perfilBorinelli'); }catch(e){}
+  if(p==='admin' || p==='operador'){
+    perfilAtivo=p;
+    document.getElementById('loginOverlay').style.display='none';
+    aplicarPerfil();
+  } else {
+    document.getElementById('loginOverlay').style.display='flex';
   }
-  const nova=pinNovo.value.trim();
-  if(!nova) return alert('Digite a nova senha.');
-  S.cfg.pin=nova; pinNovo.value='';
-  salvarTudo(); alert('Senha salva. Alterações agora exigem autorização.');
 }
-function autorizado(){
-  if(!S.cfg.pin) return true;
-  const s=prompt('🔒 Ação protegida. Digite a senha do gestor:');
-  if(s===S.cfg.pin) return true;
-  if(s!==null) alert('Senha incorreta.');
-  return false;
+function podeEditar(){ return perfilAtivo==='admin'; }
+function temPermissao(area){ return perfilAtivo==='admin' || (acessoCfg().perms[area]===true); }
+function aplicarPerfil(){
+  const a=acessoCfg();
+  const admin=perfilAtivo==='admin';
+  // telas sempre liberadas: bip, painel. Marcas e ajustes: só admin. Demais: por permissão.
+  const regra={bip:true, painel:true, relat:admin||a.perms.relat, ops:admin||a.perms.ops, marcas:admin, hist:admin||a.perms.hist, alertas:admin||a.perms.alertas, ajustes:admin};
+  document.querySelectorAll('nav button[data-t]').forEach(b=>{
+    b.classList.toggle('oculto', !regra[b.dataset.t]);
+  });
+  // botão de entrada e modo teste
+  const be=document.getElementById('btnEntrada'); if(be) be.style.display=temPermissao('entrada')?'':'none';
+  const simCard=document.getElementById('simu'); if(simCard) simCard.parentElement.style.display=admin?'':'none';
+  // se a aba ativa ficou escondida, volta pra bipagem
+  const ativa=document.querySelector('nav button[data-t].on');
+  if(ativa && ativa.classList.contains('oculto')) document.querySelector('nav button[data-t="bip"]').click();
+  // rodapé de usuário
+  const su=document.getElementById('sbUser');
+  if(su) su.innerHTML=(admin?'Conectado: <b>'+a.adminUser+'</b> (gestor)':'Conectado: <b>'+a.opUser+'</b> (operadora)')+'<br><button onclick="sair()">Sair</button>';
+  renderAcesso();
 }
+function renderAcesso(){
+  const a=acessoCfg();
+  const g=(id,v)=>{ const el=document.getElementById(id); if(el) el.value=v; };
+  g('acAdminUser',a.adminUser); g('acAdminPass',a.adminPass); g('acOpUser',a.opUser); g('acOpPass',a.opPass);
+  ['relat','ops','hist','alertas','entrada'].forEach(k=>{ const el=document.getElementById('perm-'+k); if(el) el.checked=!!a.perms[k]; });
+}
+function salvarAcesso(){
+  if(!podeEditar()) return alert('Só o gestor altera acessos.');
+  const a=acessoCfg();
+  a.adminUser=limparTexto(acAdminUser.value)||'patrick';
+  a.adminPass=(acAdminPass.value||'').trim()||'2310';
+  a.opUser=limparTexto(acOpUser.value)||'costura';
+  a.opPass=(acOpPass.value||'').trim()||'1234';
+  ['relat','ops','hist','alertas','entrada'].forEach(k=>{ const el=document.getElementById('perm-'+k); a.perms[k]=!!(el&&el.checked); });
+  salvarTudo(); aplicarPerfil(); alert('Acesso e permissões salvos.');
+}
+function autorizado(){ return perfilAtivo==='admin'; }
 /* ================= FECHAMENTO AUTOMÁTICO ================= */
 function fecharDiasAnteriores(){
   const hoje=new Date().toDateString();
@@ -938,17 +1251,18 @@ function renderTamsTemp(){
   tamsTemp.innerHTML=tamsTempArr.map((t,i)=>'<span class="chip">'+t.tam+': '+t.total+' pçs ('+t.pacotes.length+' pct) <b style="cursor:pointer;" onclick="tamsTempArr.splice('+i+',1); renderTamsTemp();">✕</b></span>').join('');
 }
 function salvarOP(){
+  if(!podeEditar()) return alert('Só o gestor cadastra ou altera OPs.');
   const num=limparTexto(opNum.value);
   if(!num) return alert('Informe o número da OP.');
   if(S.ordens.some(o=>o.num===num) && !autorizado()) return;
   if(!tamsTempArr.length) return alert('Adicione pelo menos um tamanho.');
   if(!seqTemp.length) return alert('Monte a sequência de operações (ou escolha uma marca).');
   S.ordens=S.ordens.filter(o=>o.num!==num);
-  S.ordens.push({num, marcaId:opMarca.value||null, criada:Date.now(),
+  S.ordens.push({num, cliente:limparTexto(opCliente.value)||null, marcaId:opMarca.value||null, criada:Date.now(),
     entrada:opEntrada.value||null, prazo:(function(){ const v=opPrazo.value.trim(); if(!v) return null; const iso=ddmmParaISO(v); if(!iso){ alert('Previsão de saída inválida. Use dia/mês, ex: 15/07'); throw new Error('prazo'); } return iso; })(),
     tamanhos:JSON.parse(JSON.stringify(tamsTempArr)),
-    etapas:JSON.parse(JSON.stringify(seqTemp)), externos:[]});
-  tamsTempArr=[]; seqTemp=[]; opNum.value=''; opEntrada.value=''; opPrazo.value='';
+    etapas:JSON.parse(JSON.stringify(seqTemp)), externos:[], chegadas:[], resolvidos:[]});
+  tamsTempArr=[]; seqTemp=[]; opNum.value=''; opCliente.value=''; opEntrada.value=''; opPrazo.value='';
   renderTamsTemp(); renderSeq('seqBuilder',seqTemp,'seqTemp');
   salvarTudo(); renderTudo(); alert('OP salva.');
 }
@@ -956,7 +1270,33 @@ function totalOP(o){ return o.tamanhos.reduce((s,t)=>s+t.total,0); }
 function feitasEtapa(o, idx){
   const bip=S.ciclos.filter(c=>c.ordem===o.num && c.etapaIdx===idx && c.fim).reduce((s,c)=>s+qtdEfetiva(c),0);
   const ext=(o.externos||[]).filter(e=>e.etapaIdx===idx).reduce((s,e)=>s+e.qtd,0);
-  return bip+ext;
+  const fora=(o.resolvidos||[]).filter(r=>r.etapaIdx===idx && r.tipo==='fora').reduce((s,r)=>s+(r.qtd||0),0);
+  return bip+ext+fora;
+}
+function dispensadoEtapa(o, idx){
+  return (o.resolvidos||[]).filter(r=>r.etapaIdx===idx && r.tipo==='naoleva').reduce((s,r)=>s+(r.qtd||0),0);
+}
+function pacotesEmpacados(){
+  const agora=Date.now(); const lim=(S.cfg.empacadoMin||45)*60000; const out=[];
+  S.ordens.filter(o=>o.etapas.length).forEach(o=>{
+    o.tamanhos.forEach(t=> t.pacotes.forEach(pac=>{
+      const prox=proximaEtapa(o,t.tam,pac.n);
+      if(prox<=0) return; // -1 concluído · 0 nem começou (não é esquecimento)
+      if(!pacoteConcluido(o.num,t.tam,pac.n,prox-1)) return;
+      if(etapaEmAndamento(o.num,t.tam,pac.n,prox)) return;
+      const snooze=(o.resolvidos||[]).some(r=>r.tam===t.tam && String(r.n)===String(pac.n) && r.etapaIdx===prox && r.tipo==='snooze' && r.ate>agora);
+      if(snooze) return;
+      const ant=S.ciclos.filter(c=>c.ordem===o.num && c.tam===t.tam && String(c.pacote)===String(pac.n) && c.etapaIdx===prox-1 && c.fim).sort((a,b)=>b.fim-a.fim)[0];
+      if(ant && agora-ant.fim>lim){
+        out.push({num:o.num, tam:t.tam, n:pac.n, qtd:pac.qtd, etapaIdx:prox, rotulo:o.etapas[prox].rotulo, anteriorRotulo:o.etapas[prox-1].rotulo, desde:ant.fim});
+      }
+    }));
+  });
+  return out;
+}
+function resolverEmpacado(num,tam,n,qtd,etapaIdx){
+  const o=S.ordens.find(x=>x.num===num); if(!o) return;
+  abrirLacuna('empacado', o, etapaIdx, {tam, nPac:n, qtd});
 }
 function andamentoEtapa(o,idx){ return S.ciclos.filter(c=>c.ordem===o.num && c.etapaIdx===idx && !c.fim).reduce((s,c)=>s+c.qtd,0); }
 function statusOP(o){
@@ -984,12 +1324,27 @@ function statusOP(o){
 }
 function renderOps(){
   const div=listaOps;
-  div.innerHTML = S.ordens.length? S.ordens.slice().reverse().map(o=>{
+  // datalist de clientes já usados
+  const clientes=[...new Set(S.ordens.map(o=>o.cliente).filter(Boolean))].sort();
+  const dl=document.getElementById('clientesList');
+  if(dl) dl.innerHTML=clientes.map(c=>'<option value="'+c+'">').join('');
+  // resumo: lotes rodando por cliente (não concluídos)
+  const rodando={};
+  S.ordens.forEach(o=>{ if(statusOP(o).done) return; const c=o.cliente||'Sem cliente'; rodando[c]=(rodando[c]||0)+1; });
+  const chips=Object.entries(rodando).sort((a,b)=>b[1]-a[1]);
+  let resumo='';
+  if(chips.length){
+    resumo='<div class="card"><b>Lotes rodando por cliente</b><div class="chips" style="margin-top:8px;">'+
+      chips.map(([c,n])=>'<span class="chip" style="cursor:default;">'+c+' · <b>'+n+'</b></span>').join('')+'</div></div>';
+  }
+  div.innerHTML = resumo + (S.ordens.length? S.ordens.slice().reverse().map(o=>{
     const st=statusOP(o);
     const linhas=o.tamanhos.map(t=>'<tr><td><b>'+t.tam+'</b></td><td>'+t.total+' pçs</td><td>'+t.pacotes.map(p=>p.qtd).join(' + ')+'</td></tr>').join('');
     const seq=o.etapas.map((e,i)=>(i+1)+'ª '+e.rotulo).join(' → ');
     return '<div class="card"><div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; align-items:center;">'+
-      '<span><span class="dot '+st.cor+'"></span><b style="font-size:1.05rem;">OP '+o.num+'</b>'+(o.marcaId?' · '+((S.marcas.find(m=>m.id===o.marcaId)||{}).nome||''):'')+
+      '<span><span class="dot '+st.cor+'"></span><b style="font-size:1.05rem;">OP '+o.num+'</b>'+
+      (o.cliente?' · <b style="color:var(--dourado);">'+o.cliente+'</b>':'')+
+      (o.marcaId?' · '+((S.marcas.find(m=>m.id===o.marcaId)||{}).nome||''):'')+
       (o.prazo? ' · sai '+o.prazo.split('-').reverse().join('/') : '')+
       (st.prev && !st.done? ' · previsão '+st.prev : st.done?' · concluída':'')+'</span>'+
       '<span><button class="acao mini" onclick="fichaOP(\''+o.num+'\')">📋 Resumo</button> '+
@@ -999,14 +1354,14 @@ function renderOps(){
       '<button class="acao mini alerta" onclick="if(autorizado() && confirm(\'Excluir OP?\')){S.ordens=S.ordens.filter(x=>x.num!==\''+o.num+'\'); salvarTudo(); renderTudo();}">✕</button></span></div>'+
       '<div class="mini-info" style="margin:6px 0;">'+seq+'</div>'+
       '<table><tr><th>Tam</th><th>Total</th><th>Divisão</th></tr>'+linhas+'</table></div>';
-  }).join('') : '<div class="card mini-info">Nenhuma OP cadastrada.</div>';
+  }).join('') : '<div class="card mini-info">Nenhuma OP cadastrada.</div>');
   renderSimu();
 }
 function editarSeqOP(num){
   const o=S.ordens.find(x=>x.num===num); if(!o) return;
   if(!autorizado()) return;
   seqTemp=JSON.parse(JSON.stringify(o.etapas));
-  opNum.value=o.num; opMarca.value=o.marcaId||''; opEntrada.value=o.entrada||''; opPrazo.value=isoParaDDMM(o.prazo);
+  opNum.value=o.num; opCliente.value=o.cliente||''; opMarca.value=o.marcaId||''; opEntrada.value=o.entrada||''; opPrazo.value=isoParaDDMM(o.prazo);
   tamsTempArr=JSON.parse(JSON.stringify(o.tamanhos)); renderTamsTemp();
   renderSeq('seqBuilder',seqTemp,'seqTemp');
   document.querySelector('nav button[data-t="ops"]').click();
@@ -1027,13 +1382,40 @@ function lancarExterno(num){
   salvarTudo(); renderTudo();
 }
 
+function nomePessoa(id){ return (S.pessoas.find(p=>p.id===id)||{}).nome||id; }
+function rastreioOP(o){
+  let h='<h3>Quem fez cada pacote</h3>';
+  let algum=false;
+  o.etapas.forEach((e,i)=>{
+    const cs=S.ciclos.filter(c=>c.ordem===o.num && c.etapaIdx===i && c.fim);
+    const fora=(o.resolvidos||[]).filter(r=>r.etapaIdx===i && r.tipo==='fora');
+    if(!cs.length && !fora.length){
+      h+='<div style="margin:8px 0 2px;"><b>'+(i+1)+'ª '+e.rotulo+'</b> <span class="mini-info">— ninguém ainda</span></div>';
+      return;
+    }
+    algum=true;
+    // agrupar por tamanho
+    const tams={};
+    cs.forEach(c=>{ (tams[c.tam]=tams[c.tam]||[]).push({pac:c.pacote, nome:nomePessoa(c.pessoa)+(c.origem==='retro'?' (retroativo)':''), qtd:qtdEfetiva(c)}); });
+    fora.forEach(r=>{ (tams[r.tam]=tams[r.tam]||[]).push({pac:r.n, nome:'fora da célula', qtd:r.qtd}); });
+    h+='<div style="margin:10px 0 2px;"><b>'+(i+1)+'ª '+e.rotulo+'</b></div>';
+    Object.keys(tams).sort().forEach(tam=>{
+      const its=tams[tam].sort((a,b)=>String(a.pac).localeCompare(String(b.pac),undefined,{numeric:true}));
+      h+='<div class="mini-info" style="margin:2px 0;"><b>Tam '+tam+':</b> '+
+        its.map(x=>'Pacote '+x.pac+' — '+x.nome+' ('+x.qtd+')').join(' · ')+'</div>';
+    });
+  });
+  if(!algum && !o.etapas.length) return '';
+  return h;
+}
 function fichaOP(num){
   const o=S.ordens.find(x=>x.num===num); if(!o) return;
   const marca=(S.marcas.find(m=>m.id===o.marcaId)||{}).nome||'Sem marca';
   const tot=totalOP(o);
-  fichaTit.textContent='OP '+o.num+' · '+marca;
+  fichaTit.textContent='OP '+o.num+(o.cliente?' · '+o.cliente:'')+' · '+marca;
   let html='';
   html+='<div style="display:flex; gap:20px; flex-wrap:wrap; margin-bottom:12px;">'+
+    (o.cliente?'<div><label>Cliente</label><b style="font-size:1.2rem; color:var(--dourado);">'+o.cliente+'</b></div>':'')+
     '<div><label>Total</label><b style="font-size:1.2rem;">'+tot+' peças</b></div>'+
     (o.entrada?'<div><label>Entrada</label><b>'+o.entrada.split('-').reverse().join('/')+'</b></div>':'')+
     (o.prazo?'<div><label>Saída prevista</label><b>'+o.prazo.split('-').reverse().join('/')+'</b></div>':'')+
@@ -1047,6 +1429,7 @@ function fichaOP(num){
     return '<div class="etapa-item"><span class="badge">'+(i+1)+'ª</span><b>'+e.rotulo+'</b>'+
       '<span class="mini-info"><span class="dot '+cor+'"></span>'+feitas+' / '+tot+' feitas</span></div>';
   }).join('');
+  html+=rastreioOP(o);
   if((o.externos||[]).length){
     html+='<h3>Lançamentos externos</h3>'+o.externos.map(e=>'<div class="mini-info">'+o.etapas[e.etapaIdx].rotulo+': '+e.qtd+' pçs ('+e.motivo+', '+fmtData(e.data)+')</div>').join('');
   }
@@ -1106,14 +1489,15 @@ function renderPainelOps(){
     o.etapas.forEach((e,i)=>{
       const feitas=feitasEtapa(o,i);
       const and=andamentoEtapa(o,i);
+      const disp2=dispensadoEtapa(o,i);
       const antes = i===0? pecasChegadas(o) : feitasEtapa(o,i-1);
-      const disp=Math.max(0, antes - feitas - and);
-      const falta=Math.max(0, tot - feitas);
-      let cor='ok';
-      if(falta===0) cor='off';
-      else if(disp===0 && and===0) cor='risco';
-      else if(disp<S.cfg.filaBaixa) cor='aten';
-      if(cor==='risco') avisos.push('OP '+o.num+': <b>'+e.rotulo+'</b> está sem peças disponíveis (operação anterior precisa produzir).');
+      const disp=Math.max(0, antes - feitas - and - disp2);
+      const falta=Math.max(0, tot - feitas - disp2);
+      let cor='ok';                          // verde: fluindo
+      if(falta===0) cor='off';               // cinza: etapa concluída
+      else if(disp===0 && and===0) cor='risco'; // vermelho: parado / sem peça
+      else if(disp<S.cfg.filaBaixa) cor='aten';  // amarelo: fila baixa
+      if(cor==='risco') avisos.push('OP '+o.num+': <b>'+e.rotulo+'</b> está sem peças disponíveis (a etapa anterior precisa produzir).');
       else if(cor==='aten') avisos.push('OP '+o.num+': fila baixa em <b>'+e.rotulo+'</b> ('+disp+' pçs disponíveis).');
       linhas+='<tr><td><span class="dot '+cor+'"></span>'+(i+1)+'ª '+e.rotulo+'</td><td><b>'+feitas+'</b></td><td>'+and+'</td><td>'+disp+'</td><td>'+falta+'</td></tr>';
     });
@@ -1123,7 +1507,14 @@ function renderPainelOps(){
       '<span class="mini-info">'+(st.prev?'previsão de término: <b>'+st.prev+'</b>':'')+'</span></div>'+
       '<table style="margin-top:8px;"><tr><th>Operação</th><th>Prontas</th><th>Em andamento</th><th>Aguardando</th><th>Faltam</th></tr>'+linhas+'</table></div>';
   }).join('') : '<div class="card mini-info">Nenhuma OP em andamento com sequência cadastrada.</div>';
-  alertasAbastecimento.innerHTML = avisos.length? '<div class="card alertbox"><b>Atenção no abastecimento</b><div class="mini-info" style="margin-top:6px;">'+avisos.join('<br>')+'</div></div>' : '';
+  const empac=pacotesEmpacados();
+  let hEmp='';
+  if(empac.length){
+    hEmp='<div class="card alertbox"><b>🟥 Pacotes parados (passaram da etapa anterior e ninguém pegou)</b><div style="margin-top:8px; display:flex; flex-direction:column; gap:8px;">'+
+      empac.map(x=>'<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;"><span class="mini-info">OP '+x.num+' · '+x.tam+'-'+x.n+' ('+x.qtd+' pçs) parou antes de <b>'+x.rotulo+'</b> · desde '+fmtHora(x.desde)+'</span>'+
+      '<button class="acao mini" onclick="resolverEmpacado(\''+x.num+'\',\''+x.tam+'\',\''+x.n+'\','+x.qtd+','+x.etapaIdx+')">Resolver</button></div>').join('')+'</div></div>';
+  }
+  alertasAbastecimento.innerHTML = hEmp + (avisos.length? '<div class="card alertbox"><b>Atenção no abastecimento</b><div class="mini-info" style="margin-top:6px;">'+avisos.join('<br>')+'</div></div>' : '');
 }
 function renderPainel(){
   const agora=Date.now();
@@ -1191,7 +1582,7 @@ function renderRelat(){
     const g=porOp[k]; g.n++; g.pcs+=qtdEfetiva(c); g.ms+=tempoUtil(c); g.dias.add(fmtData(c.ini));
   });
   let html='<div class="card"><h2 style="margin-top:0;">'+p.nome+' · últimos '+(dias>=9999?'todos os':dias)+' dias</h2>';
-  html+='<table><tr><th>Operação</th><th>Dias</th><th>Horas</th><th>Peças</th><th>Média pçs/h</th><th>Faixa</th><th>Para subir de faixa</th></tr>';
+  html+='<table><tr><th>Operação</th><th>Dias</th><th>Horas</th><th>Peças</th><th>Média pçs/h</th><th>Min/peça</th><th>Faixa</th><th>Para subir de faixa</th></tr>';
   let totPcs=0, totMs=0;
   Object.entries(porOp).sort((a,b)=>b[1].ms-a[1].ms).forEach(([k,g])=>{
     totPcs+=g.pcs; totMs+=g.ms;
@@ -1206,9 +1597,11 @@ function renderRelat(){
       else if(media<m100) sobe='faltam '+Math.ceil(m100-media)+' p/ 100%';
       else sobe='no topo 🏆';
     }
-    html+='<tr><td><b>'+g.rotulo+'</b></td><td>'+g.dias.size+'</td><td>'+fmtH(g.ms)+'</td><td>'+g.pcs+'</td><td><b>'+Math.round(media)+'</b></td><td><span class="faixa '+fx.cls+'">'+fx.tx+'</span></td><td>'+sobe+'</td></tr>';
+    const minPeca=g.pcs>0? (g.ms/60000/g.pcs).toFixed(2).replace('.',',') : '—';
+    html+='<tr><td><b>'+g.rotulo+'</b></td><td>'+g.dias.size+'</td><td>'+fmtH(g.ms)+'</td><td>'+g.pcs+'</td><td><b>'+Math.round(media)+'</b></td><td>'+minPeca+'</td><td><span class="faixa '+fx.cls+'">'+fx.tx+'</span></td><td>'+sobe+'</td></tr>';
   });
-  html+='<tr><td><b>TOTAL PRODUÇÃO</b></td><td></td><td><b>'+fmtH(totMs)+'</b></td><td><b>'+totPcs+'</b></td><td><b>'+Math.round(totPcs/(totMs/3600000))+'</b></td><td></td><td></td></tr></table></div>';
+  const minPecaTot=totPcs>0? (totMs/60000/totPcs).toFixed(2).replace('.',',') : '—';
+  html+='<tr><td><b>TOTAL PRODUÇÃO</b></td><td></td><td><b>'+fmtH(totMs)+'</b></td><td><b>'+totPcs+'</b></td><td><b>'+Math.round(totPcs/(totMs/3600000))+'</b></td><td><b>'+minPecaTot+'</b></td><td></td><td></td></tr></table></div>';
   // horas por tipo
   const hCons=horasPausaTipo(ciclos,'CONSERTO'), hMaq=horasPausaTipo(ciclos,'MAQUINA'), hMat=horasPausaTipo(ciclos,'MATERIAL'), hPes=horasPausaTipo(ciclos,'PESSOAL');
   html+='<div class="card"><h3 style="margin-top:0;">Horas fora da produção</h3><table>'+
@@ -1373,6 +1766,63 @@ function definirMeta(key){
   S.metasVar[key]=m; salvarTudo(); renderCalibra();
 }
 
+/* ================= OCORRÊNCIAS ================= */
+function renderOcorrencias(){
+  const sel=document.getElementById('ocDias');
+  const dias=Number(sel? sel.value : 30);
+  const desde=Date.now()-dias*86400000;
+  const nomeP=id=>(S.pessoas.find(p=>p.id===id)||{}).nome||id;
+  // resoluções de etapa
+  const res=[];
+  S.ordens.forEach(o=> (o.resolvidos||[]).forEach(r=>{
+    if(r.tipo==='snooze') return;
+    if(r.quando && r.quando<desde) return;
+    res.push({num:o.num, etapa:(o.etapas[r.etapaIdx]||{}).rotulo||('etapa '+(r.etapaIdx+1)), tipo:r.tipo, pessoa:r.pessoa?nomeP(r.pessoa):'', tam:r.tam, n:r.n, qtd:r.qtd, quando:r.quando});
+  }));
+  const contaTipo={fora:0, aqui:0, naoleva:0};
+  res.forEach(r=>{ if(contaTipo[r.tipo]!==undefined) contaTipo[r.tipo]+=1; });
+  const porOP={};
+  res.forEach(r=>{ porOP[r.num]=(porOP[r.num]||0)+1; });
+  // mistura de tamanho
+  const mix=S.ciclos.filter(c=>c.trocaTam && c.ini>=desde);
+  const mixPessoa={}, mixOp={};
+  mix.forEach(c=>{ mixPessoa[c.pessoa]=(mixPessoa[c.pessoa]||0)+1; mixOp[c.rotulo]=(mixOp[c.rotulo]||0)+1; });
+  const empac=pacotesEmpacados();
+
+  let h='';
+  h+='<div class="card"><h3 style="margin-top:0;">Resoluções de etapa</h3>';
+  h+='<div style="display:flex; gap:18px; flex-wrap:wrap; margin-bottom:8px;">'+
+     '<div><b style="font-size:1.3rem;">'+contaTipo.fora+'</b> <span class="mini-info">feito fora</span></div>'+
+     '<div><b style="font-size:1.3rem;">'+contaTipo.aqui+'</b> <span class="mini-info">creditado a alguém</span></div>'+
+     '<div><b style="font-size:1.3rem;">'+contaTipo.naoleva+'</b> <span class="mini-info">OP não leva</span></div></div>';
+  if(res.length){
+    h+='<table><tr><th>Quando</th><th>OP</th><th>Etapa</th><th>Tipo</th><th>Pacote</th><th>Pçs</th><th>Quem</th></tr>'+
+      res.sort((a,b)=>(b.quando||0)-(a.quando||0)).slice(0,80).map(r=>{
+        const tp = r.tipo==='fora'?'feito fora' : r.tipo==='aqui'?'feito aqui' : 'não leva';
+        return '<tr><td>'+(r.quando?fmtData(r.quando):'—')+'</td><td>'+r.num+'</td><td>'+r.etapa+'</td><td>'+tp+'</td><td>'+r.tam+'-'+r.n+'</td><td>'+(r.qtd||'')+'</td><td>'+(r.pessoa||'—')+'</td></tr>';
+      }).join('')+'</table>';
+    const opMais=Object.entries(porOP).sort((a,b)=>b[1]-a[1])[0];
+    if(opMais) h+='<div class="mini-info" style="margin-top:8px;">OP com mais resoluções no período: <b>OP '+opMais[0]+'</b> ('+opMais[1]+').</div>';
+  } else h+='<div class="mini-info">Nenhuma resolução de etapa no período.</div>';
+  h+='</div>';
+
+  h+='<div class="card"><h3 style="margin-top:0;">Mistura de tamanho</h3>';
+  if(mix.length){
+    const pMais=Object.entries(mixPessoa).sort((a,b)=>b[1]-a[1])[0];
+    const oMais=Object.entries(mixOp).sort((a,b)=>b[1]-a[1])[0];
+    h+='<div class="mini-info" style="margin-bottom:8px;">'+mix.length+' trocas de tamanho no período. Onde acontece mais: <b>'+nomeP(pMais[0])+'</b> ('+pMais[1]+'x) · operação <b>'+oMais[0]+'</b> ('+oMais[1]+'x).</div>';
+    h+='<table><tr><th>Data</th><th>Pessoa</th><th>Operação</th><th>De → para</th></tr>'+
+      mix.sort((a,b)=>b.ini-a.ini).slice(0,60).map(c=>'<tr><td>'+fmtData(c.ini)+'</td><td>'+nomeP(c.pessoa)+'</td><td>'+c.rotulo+'</td><td>'+c.trocaTam.de+' → '+c.trocaTam.para+'</td></tr>').join('')+'</table>';
+  } else h+='<div class="mini-info">Nenhuma troca de tamanho registrada no período.</div>';
+  h+='</div>';
+
+  h+='<div class="card'+(empac.length?' alertbox':'')+'"><h3 style="margin-top:0;">Pacotes parados agora</h3>';
+  h+= empac.length? '<table><tr><th>OP</th><th>Pacote</th><th>Parou antes de</th><th>Desde</th></tr>'+
+      empac.map(x=>'<tr><td>'+x.num+'</td><td>'+x.tam+'-'+x.n+' ('+x.qtd+')</td><td>'+x.rotulo+'</td><td>'+fmtHora(x.desde)+'</td></tr>').join('')+'</table>' : '<div class="mini-info">Nenhum pacote parado no momento.</div>';
+  h+='</div>';
+  document.getElementById('ocorrOut').innerHTML=h;
+}
+
 /* ================= HISTÓRICO / ALERTAS ================= */
 function renderHist(){
   const fp=fPessoa.value, fd=fData.value;
@@ -1452,11 +1902,14 @@ function preencherCfg(){
   cfgIni.value=S.cfg.ini; cfgFim.value=S.cfg.fim; cfgFimSex.value=S.cfg.fimSex;
   cfgCafeIni.value=S.cfg.cafeIni; cfgCafeFim.value=S.cfg.cafeFim; cfgCafeTol.value=S.cfg.cafeTol;
   cfgTroca.value=S.cfg.troca; cfgAnom.value=S.cfg.anom; cfgFila.value=S.cfg.filaBaixa||70;
+  const ce=document.getElementById('cfgEmpac'); if(ce) ce.value=S.cfg.empacadoMin||45;
 }
 function salvarCfg(){
   if(!autorizado()) return;
-  S.cfg={ini:cfgIni.value, fim:cfgFim.value, fimSex:cfgFimSex.value, cafeIni:cfgCafeIni.value, cafeFim:cfgCafeFim.value,
-    cafeTol:Number(cfgCafeTol.value), troca:Number(cfgTroca.value), anom:Number(cfgAnom.value), filaBaixa:Number(cfgFila.value)};
+  const ce=document.getElementById('cfgEmpac');
+  S.cfg=Object.assign({}, S.cfg, {ini:cfgIni.value, fim:cfgFim.value, fimSex:cfgFimSex.value, cafeIni:cfgCafeIni.value, cafeFim:cfgCafeFim.value,
+    cafeTol:Number(cfgCafeTol.value), troca:Number(cfgTroca.value), anom:Number(cfgAnom.value), filaBaixa:Number(cfgFila.value),
+    empacadoMin:Number(ce&&ce.value)||45});
   salvarTudo(); alert('Regras salvas.');
 }
 function addPessoa(){
@@ -1483,6 +1936,7 @@ function renderAjustes(){
   rp.innerHTML=S.pessoas.map(p=>'<option value="'+p.id+'">'+p.nome+'</option>').join('');
   if(at) rp.value=at;
   if(!sbBase.options.length){ sbBase.innerHTML=sbSelectHTML(); sbBaseM.innerHTML=sbSelectHTML(); renderSbVars(); renderSbVarsM(); }
+  renderAcesso();
 }
 function baixarBackup(){
   const b=new Blob([JSON.stringify(S)],{type:'application/json'});
@@ -1509,7 +1963,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.0.0';
+const VERSAO = '3.3.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -1589,13 +2043,26 @@ document.querySelectorAll('nav button').forEach(b=>{
     renderTudo();
   });
 });
-function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderSimu(); }
+function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); }
+/* atalhos: Enter confirma, Esc cancela nos modais */
+document.addEventListener('keydown', e=>{
+  const conf=document.getElementById('confModal'), lac=document.getElementById('lacModal');
+  if(conf && conf.classList.contains('on')){
+    if(e.key==='Enter'){ e.preventDefault(); confirmarCiclo(); }
+    else if(e.key==='Escape'){ e.preventDefault(); cancelarCiclo(); }
+  } else if(lac && lac.classList.contains('on')){
+    if(e.key==='Escape'){ e.preventDefault(); cancelarLacuna(); }
+  }
+});
+/* expor no window as funções usadas em onclick */
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso});
+document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
 sbVersao.textContent='v'+VERSAO;
 const tv2=document.getElementById('txtVersao'); if(tv2) tv2.textContent='Versão instalada: '+VERSAO;
 try{ opEntrada.value=new Date().toISOString().slice(0,10); }catch(e){}
-carregar().then(()=>{ if(typeof firebase!=='undefined') iniciarFirebase(); });
+carregar().then(()=>{ restaurarPerfil(); if(typeof firebase!=='undefined') iniciarFirebase(); });
 </script>
 </body>
 </html>
