@@ -12,6 +12,8 @@ if('serviceWorker' in navigator && location.protocol.startsWith('http')){
   navigator.serviceWorker.register('sw.js').catch(()=>{});
 }
 </script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <style>
@@ -147,7 +149,8 @@ body.tv .pcard .nome{font-size:1.25rem;} body.tv table{font-size:.95rem;} body.t
     <button data-t="alertas">⚠️ Alertas <span id="nAlertas"></span></button>
     <button data-t="ajustes">⚙️ Ajustes</button>
   </nav>
-  <div id="sbVersao" style="margin-top:auto; padding:10px; text-align:center; color:rgba(246,253,235,.55); font-size:.7rem;"></div>
+  <div id="syncStatus" style="padding:4px 10px 0; text-align:center; font-size:.72rem; font-weight:700;">● conectando...</div>
+  <div id="sbVersao" style="margin-top:auto; padding:6px 10px 10px; text-align:center; color:rgba(246,253,235,.55); font-size:.7rem;"></div>
 </aside>
 <div id="bannerAtualiza" style="display:none; position:fixed; bottom:14px; left:50%; transform:translateX(-50%); z-index:70; background:var(--verde); color:var(--creme); border:2px solid var(--dourado); border-radius:12px; padding:12px 18px; display:none; align-items:center; gap:14px; box-shadow:0 8px 30px rgba(0,0,0,.3);">
   <span>🔄 Nova versão do sistema disponível</span>
@@ -507,16 +510,67 @@ let S = {cfg:{...CFG_PADRAO}, pessoas:PESSOAS_PADRAO, opsBase:OPS_BASE, metasVar
 let sel=null, pendingBase=null, pendingPacote=null, pendingTs=0, entradaMode=false;
 let seqTemp=[], seqTempM=[], tamsTempArr=[];
 
+/* ================= FIREBASE / SINCRONIZAÇÃO ================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyAudnkPUtDS4r7INo6hZN6X4ectJJRWxjw",
+  authDomain: "borinelli-producao.firebaseapp.com",
+  databaseURL: "https://borinelli-producao-default-rtdb.firebaseio.com",
+  projectId: "borinelli-producao",
+  storageBucket: "borinelli-producao.firebasestorage.app",
+  messagingSenderId: "508417981257",
+  appId: "1:508417981257:web:0268f6235838be2605b898"
+};
+let fbDB=null, fbOnline=false, aplicandoRemoto=false, ultimoEnvio=0;
+function iniciarFirebase(){
+  try{
+    firebase.initializeApp(firebaseConfig);
+    fbDB=firebase.database();
+    const ref=fbDB.ref('estado');
+    // status de conexão
+    fbDB.ref('.info/connected').on('value', s=>{ fbOnline=!!s.val(); pintarStatusSync(); });
+    // ouvir mudanças remotas
+    ref.on('value', snap=>{
+      const v=snap.val();
+      if(!v || !v.dados) return;
+      if(v.origem===meuId) return; // eco do meu próprio envio
+      try{
+        const d=JSON.parse(v.dados);
+        aplicandoRemoto=true;
+        S=Object.assign(S,d);
+        aplicandoRemoto=false;
+        gravarLocal(JSON.stringify(S));
+        renderTudo(); preencherCfg();
+      }catch(e){ aplicandoRemoto=false; }
+    });
+  }catch(e){ console.error('Firebase falhou', e); }
+}
+const meuId = 'ap-'+Math.random().toString(36).slice(2,9);
+function enviarParaNuvem(){
+  if(!fbDB || aplicandoRemoto) return;
+  const agora=Date.now();
+  ultimoEnvio=agora;
+  const meu=agora;
+  fbDB.ref('estado').set({dados:JSON.stringify(S), origem:meuId, ts:agora}).catch(()=>{});
+}
+function pintarStatusSync(){
+  const el=document.getElementById('syncStatus');
+  if(!el) return;
+  el.textContent = fbOnline? '● Sincronizado' : '● Sem conexão';
+  el.style.color = fbOnline? 'var(--f-90)' : 'var(--f-abx)';
+}
+
+
 /* ================= PERSISTÊNCIA ================= */
 const temStorageClaude = typeof window.storage !== 'undefined';
 async function lerDados(){
   if(temStorageClaude){ try{ const r=await window.storage.get('borinelli-prod'); return r&&r.value?r.value:null; }catch(e){ return null; } }
   return localStorage.getItem('borinelli-prod');
 }
-async function gravarDados(str){
+async function gravarLocal(str){
   if(temStorageClaude){ try{ await window.storage.set('borinelli-prod', str); }catch(e){} }
   else{ try{ localStorage.setItem('borinelli-prod', str); }catch(e){ alert('Falha ao salvar no navegador.'); } }
 }
+async function gravarDados(str){ await gravarLocal(str); enviarParaNuvem(); }
 async function carregar(){
   const v=await lerDados();
   if(v){ try{ const d=JSON.parse(v); S=Object.assign(S,d); }catch(e){} }
@@ -1455,7 +1509,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '2.7.1';
+const VERSAO = '3.0.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -1541,7 +1595,7 @@ setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); ren
 sbVersao.textContent='v'+VERSAO;
 const tv2=document.getElementById('txtVersao'); if(tv2) tv2.textContent='Versão instalada: '+VERSAO;
 try{ opEntrada.value=new Date().toISOString().slice(0,10); }catch(e){}
-carregar();
+carregar().then(()=>{ if(typeof firebase!=='undefined') iniciarFirebase(); });
 </script>
 </body>
 </html>

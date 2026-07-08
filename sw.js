@@ -1,4 +1,4 @@
-const CACHE = 'borinelli-prod-v21';
+const CACHE = 'borinelli-prod-v22';
 const ARQUIVOS = [
   './index.html',
   './manifest.json',
@@ -6,6 +6,8 @@ const ARQUIVOS = [
   './logo.png',
   './icone-512.png',
   'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js',
+  'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
+  'https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js',
   'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js'
 ];
 self.addEventListener('install', e => {
