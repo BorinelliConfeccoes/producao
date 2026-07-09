@@ -218,10 +218,12 @@ nav button.oculto{display:none;}
     <div class="det" id="bipDet">Bipe o crachá e depois o pacote. O sistema deduz a operação da vez.</div>
     <div style="margin-top:14px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
       <button class="acao" id="btnCam" onclick="event.stopPropagation(); alternarCamera()">📷 Bipar com a câmera</button>
+      <button class="acao sec" id="btnLote" onclick="event.stopPropagation(); alternarLote()">🧺 Modo lote (bipar vários prontos)</button>
       <button class="acao sec" id="btnEntrada" onclick="event.stopPropagation(); alternarEntrada()">📦 Modo entrada de pacotes</button>
     </div>
     <div id="leitorCam" style="max-width:340px; margin:12px auto 0; border-radius:12px; overflow:hidden;"></div>
   </div>
+  <div class="card" id="lotePanel" style="display:none; margin-top:14px;"></div>
   <div class="card" style="margin-top:14px;">
     <div style="display:flex; justify-content:space-between; align-items:center;">
       <h2 style="margin:0;">Modo teste (toque para simular)</h2>
@@ -322,8 +324,10 @@ nav button.oculto{display:none;}
     <div class="linhaform">
       <div><label>Tamanho</label><input id="opTam" placeholder="G" style="width:70px;"></div>
       <div><label>Tonalidade/lote (opcional)</label><input id="opTon" placeholder="L1, amarelo..." style="width:130px;"></div>
-      <div><label>Total de peças</label><input id="opQtd" type="number" placeholder="354" style="width:110px;"></div>
-      <div><label>Peças por pacote</label><input id="opPct" type="number" placeholder="70" style="width:110px;"></div>
+      <div><label>Divisão dos pacotes</label><select id="opModoPct" onchange="mudarModoPacote()"><option value="padrao">Dividir igual (padrão)</option><option value="manual">Pacote a pacote</option></select></div>
+      <div id="campoTotal"><label>Total de peças</label><input id="opQtd" type="number" placeholder="354" style="width:110px;"></div>
+      <div id="campoPct"><label>Peças por pacote</label><input id="opPct" type="number" placeholder="70" style="width:110px;"></div>
+      <div id="campoManual" style="display:none;"><label>Quantidade de cada pacote</label><input id="opPctLista" placeholder="70, 72, 50, 68, 80" style="width:210px;"></div>
       <button class="acao sec" onclick="addTamTemp()">+ Tamanho</button>
     </div>
     <div class="chips" id="tamsTemp"></div>
@@ -602,6 +606,7 @@ const CFG_PADRAO = {ini:'05:00', fim:'14:30', fimSex:'13:30', cafeIni:'08:30', c
 let S = {cfg:{...CFG_PADRAO}, pessoas:PESSOAS_PADRAO, opsBase:OPS_BASE, metasVar:{}, baselines:BASELINES_PADRAO, marcas:[], ordens:[], ciclos:[]};
 let sel=null, pendingBase=null, pendingPacote=null, pendingTs=0, entradaMode=false;
 let travaBip=false, propostaAtual=null, lacPendente=null;
+let modoLote=false, loteItens=[];
 let seqTemp=[], seqTempM=[], tamsTempArr=[];
 
 /* ================= FIREBASE / SINCRONIZAÇÃO ================= */
@@ -614,7 +619,7 @@ const firebaseConfig = {
   messagingSenderId: "508417981257",
   appId: "1:508417981257:web:0268f6235838be2605b898"
 };
-let fbDB=null, fbOnline=false, aplicandoRemoto=false, ultimoEnvio=0;
+let fbDB=null, fbOnline=false, aplicandoRemoto=false, ultimoEnvio=0, jaRecebeuNuvem=false;
 function ligarBanco(){
   if(fbDB) return; // já ligado
   fbDB=firebase.database();
@@ -623,11 +628,20 @@ function ligarBanco(){
   fbDB.ref('.info/connected').on('value', s=>{ fbOnline=!!s.val(); pintarStatusSync(); });
   // ouvir mudanças remotas
   ref.on('value', snap=>{
+    jaRecebeuNuvem=true; // já ouvi a nuvem: agora posso enviar sem risco de sobrescrever no escuro
     const v=snap.val();
-    if(!v || !v.dados) return;
+    if(!v || !v.dados){
+      // nuvem vazia: se eu tenho cadastro local, subo o meu pra semear (não deixo o vazio prevalecer)
+      if((S.marcas&&S.marcas.length)||(S.ordens&&S.ordens.length)) enviarParaNuvem();
+      return;
+    }
     if(v.origem===meuId) return; // eco do meu próprio envio
     try{
       const d=JSON.parse(v.dados);
+      // proteção contra apagão: não deixo o remoto zerar marcas/ordens que eu tenho
+      const zeraMarcas=Array.isArray(d.marcas) && d.marcas.length===0 && Array.isArray(S.marcas) && S.marcas.length>0;
+      const zeraOrdens=Array.isArray(d.ordens) && d.ordens.length===0 && Array.isArray(S.ordens) && S.ordens.length>0;
+      if(zeraMarcas || zeraOrdens){ enviarParaNuvem(); return; }
       aplicandoRemoto=true;
       S=Object.assign(S,d);
       aplicandoRemoto=false;
@@ -646,7 +660,7 @@ function iniciarFirebase(){
 }
 const meuId = 'ap-'+Math.random().toString(36).slice(2,9);
 function enviarParaNuvem(){
-  if(!fbDB || aplicandoRemoto) return;
+  if(!fbDB || aplicandoRemoto || !jaRecebeuNuvem) return; // só envia depois de já ter recebido a nuvem
   const agora=Date.now();
   ultimoEnvio=agora;
   const meu=agora;
@@ -717,7 +731,7 @@ function faixaDe(opKey, rate){
   return {tx:'Abaixo de 70%', cls:'fx-abx'};
 }
 function baseline(pessoa, opKey){
-  const fech=S.ciclos.filter(c=>c.pessoa===pessoa && c.opKey===opKey && c.fim && !c.flag);
+  const fech=S.ciclos.filter(c=>c.pessoa===pessoa && c.opKey===opKey && c.fim && !c.flag && !c.lote);
   if(fech.length>=3){ const rs=fech.slice(-30).map(c=>c.rateEfetivo||rateDe(c)).sort((a,b)=>a-b); return rs[Math.floor(rs.length/2)]; }
   return S.baselines[pessoa+'|'+opKey.split('|')[0]] || null;
 }
@@ -846,6 +860,12 @@ function proporCiclo(pessoaId, pk){
     if(gap>=0){ abrirLacuna('sequencia', o, gap, {num,tam,nPac,qtd,pessoaId, alvo:rotulo}); return; }
   }
 
+  // MODO LOTE: em vez de abrir a confirmação, junta o pacote na lista do lote
+  if(modoLote){
+    adicionarAoLote({pessoaId, pessoaNome:pessoa.nome, num, tam, nPac, qtd:Number(qtd), opKey, base, rotulo, etapaIdx, fecharAoConfirmar});
+    limparPend(); return;
+  }
+
   // acumulado do dia nessa operação (inclui o ciclo aberto que vai fechar por troca)
   const hoje=new Date().toDateString();
   const doDiaOp=S.ciclos.filter(c=>c.pessoa===pessoaId && c.opKey===opKey && new Date(c.ini).toDateString()===hoje && !(c.ordem===num && c.tam===tam && String(c.pacote)===String(nPac)));
@@ -901,6 +921,68 @@ function confirmarCiclo(){
 function cancelarCiclo(){
   propostaAtual=null; limparPend(); ocultarModais();
   flash(true,'Cancelado','Nada foi registrado');
+}
+
+/* ---- MODO LOTE: bipar vários pacotes prontos de uma vez ---- */
+function alternarLote(){
+  modoLote=!modoLote;
+  const btn=document.getElementById('btnLote');
+  if(btn) btn.textContent = modoLote? '🧺 Lote LIGADO — bipe os prontos' : '🧺 Modo lote (bipar vários prontos)';
+  renderLote();
+  flash(true, modoLote?'Modo lote ligado':'Modo lote desligado', modoLote?'Bipe os pacotes prontos e toque em Fechar lote':'');
+}
+function adicionarAoLote(item){
+  if(loteItens.some(x=>x.pessoaId===item.pessoaId && x.num===item.num && x.tam===item.tam && String(x.nPac)===String(item.nPac))){
+    flash(true,'Já está no lote', item.rotulo+' · '+item.tam+'-'+item.nPac); return;
+  }
+  loteItens.push(item);
+  flash(true,'No lote ('+loteItens.length+')', item.pessoaNome+' · '+item.rotulo+' · '+item.tam+'-'+item.nPac+' · '+item.qtd+' pçs');
+  renderLote();
+}
+function removerDoLote(i){ loteItens.splice(i,1); renderLote(); }
+function cancelarLote(){ loteItens=[]; renderLote(); flash(true,'Lote descartado','Nada foi registrado'); }
+function renderLote(){
+  const panel=document.getElementById('lotePanel'); if(!panel) return;
+  if(!loteItens.length){ panel.style.display='none'; panel.innerHTML=''; return; }
+  panel.style.display='block';
+  const totalPcs=loteItens.reduce((s,x)=>s+x.qtd,0);
+  const linhas=loteItens.map((x,i)=>'<div style="display:flex; justify-content:space-between; gap:8px; align-items:center;"><span class="mini-info">'+x.pessoaNome+' · '+x.rotulo+' · '+x.tam+'-'+x.nPac+' · '+x.qtd+' pçs</span><b style="cursor:pointer; color:#b23b3b;" onclick="removerDoLote('+i+')">✕</b></div>').join('');
+  panel.innerHTML='<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;"><b>🧺 Lote: '+loteItens.length+' pacotes · '+totalPcs+' peças</b>'+
+    '<span><button class="acao" onclick="fecharLote()">Fechar lote</button> <button class="acao sec" onclick="cancelarLote()">Descartar</button></span></div>'+
+    '<div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">'+linhas+'</div>'+
+    '<div class="mini-info" style="margin-top:8px;">O tempo desde o último bip de cada pessoa é repartido entre os pacotes dela pelas peças. Contam nas peças e na média do dia, sem mexer na referência de ritmo.</div>';
+}
+function fecharLote(){
+  if(!loteItens.length) return;
+  const agora=Date.now();
+  const jornadaIni=horaDoDia(agora, S.cfg.ini);
+  const porPessoa={};
+  loteItens.forEach(it=>{ (porPessoa[it.pessoaId]=porPessoa[it.pessoaId]||[]).push(it); });
+  Object.entries(porPessoa).forEach(([pid, itens])=>{
+    const hojeStr=new Date(agora).toDateString();
+    const fims=S.ciclos.filter(c=>c.pessoa===pid && c.fim && new Date(c.fim).toDateString()===hojeStr).map(c=>c.fim);
+    let blockStart = fims.length? Math.max(...fims) : jornadaIni;
+    if(blockStart<jornadaIni) blockStart=jornadaIni;
+    if(blockStart>agora-60000*itens.length) blockStart=agora-60000*itens.length;
+    const totalPcs=itens.reduce((s,x)=>s+x.qtd,0)||1;
+    const elapsed=Math.max(agora-blockStart, 60000*itens.length);
+    const rateBloco=totalPcs/(elapsed/3600000);
+    let cursor=blockStart;
+    itens.forEach(it=>{
+      if(it.fecharAoConfirmar){ const outro=S.ciclos.find(c=>c.id===it.fecharAoConfirmar && !c.fim); if(outro) fecharCiclo(outro, cursor, 'bip'); }
+      const o=S.ordens.find(x=>x.num===it.num);
+      if(o && !pacoteChegou(o,it.tam,it.nPac)) o.chegadas.push({tam:it.tam, n:it.nPac, ts:cursor});
+      const dur=Math.max(60000, Math.round(elapsed*(it.qtd/totalPcs)));
+      const ini=cursor, fim=Math.min(agora, cursor+dur);
+      S.ciclos.push({id:fim+'-'+pid+'-lote-'+it.num+'-'+it.tam+'-'+it.nPac, pessoa:pid, op:(it.opKey||'').split('|')[0], opKey:it.opKey,
+        rotulo:it.rotulo, etapaIdx:it.etapaIdx, ordem:it.num, tam:it.tam, pacote:it.nPac, qtd:it.qtd,
+        ini, fim, pausas:[], lote:true, rateEfetivo:rateBloco});
+      cursor=fim;
+    });
+  });
+  const n=loteItens.length; loteItens=[];
+  renderLote(); salvarTudo(); renderTudo();
+  flash(true, n+' pacotes lançados em lote', 'Tempo repartido entre eles. Peças contadas na média do dia.');
 }
 
 /* ---- resolução de etapa que ficou pra trás ---- */
@@ -983,6 +1065,7 @@ function fecharCiclo(c, quando, motivo){
   (c.pausas||[]).forEach(p=>{ if(!p.fim) p.fim=c.fim; });
   c.fechamento=motivo;
   const rate=rateDe(c); c.rateEfetivo=rate;
+  if(c.lote) return; // ciclo de lote não vira anomalia nem baliza a referência
   const base=baseline(c.pessoa,c.opKey);
   const lim=S.cfg.anom/100;
   if(base && (rate<base*(1-lim)||rate>base*(1+lim))){ c.flag='anomalia'; c.baseNaHora=base; }
@@ -1237,18 +1320,37 @@ function dividirPacotes(total,por){
   for(let i=0;i<n;i++) l.push(i<rem? base+1 : base);
   return l;
 }
+function mudarModoPacote(){
+  const manual=document.getElementById('opModoPct').value==='manual';
+  document.getElementById('campoTotal').style.display=manual?'none':'';
+  document.getElementById('campoPct').style.display=manual?'none':'';
+  document.getElementById('campoManual').style.display=manual?'':'none';
+}
 function addTamTemp(){
-  let tam=limparTexto(opTam.value).toUpperCase(), q=Number(opQtd.value), p=Number(opPct.value);
+  let tam=limparTexto(opTam.value).toUpperCase();
   const ton=limparTexto(opTon.value).toUpperCase();
-  if(!tam||!q||!p) return alert('Preencha tamanho, total e peças por pacote.');
+  if(!tam) return alert('Preencha o tamanho.');
+  const manual=document.getElementById('opModoPct').value==='manual';
+  let pacotes, total;
+  if(manual){
+    const nums=(opPctLista.value||'').split(/[^0-9]+/).map(Number).filter(x=>x>0);
+    if(!nums.length) return alert('Digite a quantidade de cada pacote. Ex: 70, 72, 50, 68, 80');
+    pacotes=nums.map((x,i)=>({n:i+1, qtd:x}));
+    total=nums.reduce((a,b)=>a+b,0);
+  } else {
+    const q=Number(opQtd.value), p=Number(opPct.value);
+    if(!q||!p) return alert('Preencha total e peças por pacote.');
+    pacotes=dividirPacotes(q,p).map((x,i)=>({n:i+1,qtd:x}));
+    total=q;
+  }
   if(ton) tam=tam+'·'+ton;
   tamsTempArr=tamsTempArr.filter(t=>t.tam!==tam);
-  tamsTempArr.push({tam, total:q, pacotes:dividirPacotes(q,p).map((x,i)=>({n:i+1,qtd:x}))});
-  opTam.value=''; opQtd.value=''; opTon.value='';
+  tamsTempArr.push({tam, total, pacotes});
+  opTam.value=''; opQtd.value=''; opTon.value=''; if(document.getElementById('opPctLista')) opPctLista.value='';
   renderTamsTemp();
 }
 function renderTamsTemp(){
-  tamsTemp.innerHTML=tamsTempArr.map((t,i)=>'<span class="chip">'+t.tam+': '+t.total+' pçs ('+t.pacotes.length+' pct) <b style="cursor:pointer;" onclick="tamsTempArr.splice('+i+',1); renderTamsTemp();">✕</b></span>').join('');
+  tamsTemp.innerHTML=tamsTempArr.map((t,i)=>'<span class="chip">'+t.tam+': '+t.total+' pçs ('+t.pacotes.map(p=>p.qtd).join('+')+') <b style="cursor:pointer;" onclick="tamsTempArr.splice('+i+',1); renderTamsTemp();">✕</b></span>').join('');
 }
 function salvarOP(){
   if(!podeEditar()) return alert('Só o gestor cadastra ou altera OPs.');
@@ -1963,7 +2065,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.3.0';
+const VERSAO = '3.5.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2055,7 +2157,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
