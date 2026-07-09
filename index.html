@@ -2127,18 +2127,26 @@ function salvarCfg(){
   salvarTudo(); alert('Regras salvas.');
 }
 function addPessoa(){
-  const n=limparTexto(novaPessoa.value); if(!n) return;
-  const id=n.toUpperCase().normalize('NFD').replace(/[^A-Z0-9]/g,'');
-  if(S.pessoas.some(p=>p.id===id)) return alert('Já existe.');
+  let n=limparTexto(novaPessoa.value); if(!n) return;
+  const idDe = txt=>txt.toUpperCase().normalize('NFD').replace(/[^A-Z0-9]/g,'');
+  let id=idDe(n);
+  if(S.pessoas.some(p=>p.id===id)){
+    const extra=prompt('Já existe uma pessoa chamada "'+n+'".\nDigite um sobrenome ou inicial para diferenciar (ex: '+n+' S).\nDeixe vazio para numerar automaticamente.','');
+    if(extra===null) return;
+    const ex=limparTexto(extra);
+    if(ex){ n=n+' '+ex; id=idDe(n); }
+    if(!ex || S.pessoas.some(p=>p.id===id)){ let k=2; while(S.pessoas.some(p=>p.id===idDe(n)+k)) k++; id=idDe(n)+k; if(!ex) n=n+' '+k; }
+  }
   const fone=(novaPessoaFone.value||'').replace(/\D/g,'');
   S.pessoas.push({id,nome:n,fone}); novaPessoa.value=''; novaPessoaFone.value='';
   salvarTudo(); renderTudo();
 }
 function editarFone(id){
   const p=S.pessoas.find(x=>x.id===id); if(!p) return;
+  const nome=prompt('Nome de exibição de '+p.nome+'\n(muda só o que aparece; o histórico continua ligado)', p.nome);
+  if(nome!==null){ const nn=limparTexto(nome); if(nn) p.nome=nn; }
   const f=prompt('WhatsApp de '+p.nome+' (só números, com DDD):', p.fone||'');
-  if(f===null) return;
-  p.fone=f.replace(/\D/g,'');
+  if(f!==null) p.fone=f.replace(/\D/g,'');
   salvarTudo(); renderTudo();
 }
 function renderAjustes(){
@@ -2177,7 +2185,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.8.0';
+const VERSAO = '3.8.1';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2187,13 +2195,18 @@ window.addEventListener('unhandledrejection', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:'promise: '+(e.reason&&e.reason.message||e.reason), versao:VERSAO});
   if(ERROS.length>30) ERROS.shift();
 });
+function versaoMaior(a,b){ // a > b ?
+  const pa=String(a).split('.').map(x=>parseInt(x,10)||0), pb=String(b).split('.').map(x=>parseInt(x,10)||0);
+  for(let i=0;i<Math.max(pa.length,pb.length);i++){ const x=pa[i]||0, y=pb[i]||0; if(x>y) return true; if(x<y) return false; }
+  return false;
+}
 async function verificarAtualizacao(manual){
   if(!location.protocol.startsWith('http')) { if(manual) alert('Verificação só funciona no site publicado.'); return; }
   try{
     const r=await fetch('version.json?ts='+Date.now(), {cache:'no-store'});
     const v=await r.json();
-    if(v.versao && v.versao!==VERSAO){ bannerAtualiza.style.display='flex'; }
-    else if(manual) alert('Você já está na versão mais recente ('+VERSAO+').');
+    if(v.versao && versaoMaior(v.versao, VERSAO)){ bannerAtualiza.style.display='flex'; }
+    else { bannerAtualiza.style.display='none'; if(manual) alert('Você já está na versão mais recente ('+VERSAO+').'); }
   }catch(e){ if(manual) alert('Não consegui verificar agora. Confira a internet.'); }
 }
 async function aplicarAtualizacao(){

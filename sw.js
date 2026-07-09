@@ -1,8 +1,7 @@
-const CACHE = 'borinelli-prod-v33';
+const CACHE = 'borinelli-prod-v34';
 const ARQUIVOS = [
   './index.html',
   './manifest.json',
-  './version.json',
   './icone-192.png',
   './icone-512.png',
   './logo.png',
@@ -22,8 +21,13 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  // rede primeiro pra checagem de versão e navegação (pega a atualização na hora)
-  if (url.pathname.endsWith('version.json') || req.mode === 'navigate') {
+  // version.json: sempre rede, nunca cache (evita falso 'nova versão')
+  if (url.pathname.endsWith('version.json')) {
+    e.respondWith(fetch(req).catch(() => new Response('{"versao":"0"}', {headers:{'Content-Type':'application/json'}})));
+    return;
+  }
+  // navegação: rede primeiro (pega atualização na hora), cache como reserva
+  if (req.mode === 'navigate') {
     e.respondWith(
       fetch(req).then(r => { const cp = r.clone(); caches.open(CACHE).then(c => c.put(req, cp)); return r; })
                 .catch(() => caches.match(req).then(m => m || caches.match('./index.html')))
