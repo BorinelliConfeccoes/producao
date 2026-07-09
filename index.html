@@ -164,6 +164,7 @@ body.tv .pcard .nome{font-size:1.25rem;} body.tv table{font-size:.95rem;} body.t
 #sbUser{margin-top:auto; padding:8px 10px; text-align:center; font-size:.74rem; color:rgba(246,253,235,.8); border-top:1px solid rgba(246,253,235,.15);}
 #sbUser button{margin-top:5px; background:transparent; border:1px solid rgba(246,253,235,.4); color:var(--creme); border-radius:8px; padding:4px 12px; font-size:.72rem; cursor:pointer; font-weight:700;}
 nav button.oculto{display:none;}
+.chip.sel-op{ background:var(--verde); color:var(--creme); border-color:var(--verde); font-weight:800; box-shadow:0 2px 8px rgba(61,77,50,.35); }
 </style>
 </head>
 <body>
@@ -213,9 +214,11 @@ nav button.oculto{display:none;}
 <!-- ============ BIPAGEM ============ -->
 <section class="tela on" id="t-bip">
   <input id="bipInput" autocomplete="off">
+  <div class="card" id="pessoaPickerCard" style="margin-bottom:14px;"><div id="pessoaPicker"></div></div>
+  <div class="card" id="opPickerCard" style="display:none; margin-bottom:14px;"><div id="opPicker"></div></div>
   <div class="bip-zona" onclick="focarBip()">
-    <div class="msg" id="bipMsg">Pronto para bipar</div>
-    <div class="det" id="bipDet">Bipe o crachá e depois o pacote. O sistema deduz a operação da vez.</div>
+    <div class="msg" id="bipMsg">Selecione o funcionário</div>
+    <div class="det" id="bipDet">Toque no funcionário e na operação acima, depois bipe o pacote.</div>
     <div style="margin-top:14px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
       <button class="acao" id="btnCam" onclick="event.stopPropagation(); alternarCamera()">📷 Bipar com a câmera</button>
       <button class="acao sec" id="btnLote" onclick="event.stopPropagation(); alternarLote()">🧺 Modo lote (bipar vários prontos)</button>
@@ -460,10 +463,10 @@ nav button.oculto{display:none;}
   </div>
   <div class="sub" id="sub-aj-impressao">
   <div class="card">
-    <h2 style="margin-top:0;">Imprimir crachás e cartões</h2>
+    <h2 style="margin-top:0;">Imprimir cartões de controle</h2>
+    <div class="mini-info" style="margin-bottom:8px;">Funcionário e operação agora são selecionados na tela de bipagem. O QR ficou só para os pacotes. Estes cartões são os controles (pausa, sem serviço, encerrar, entrada).</div>
     <div class="linhaform">
-      <button class="acao" onclick="imprimirCrachas()">Crachás das pessoas</button>
-      <button class="acao" onclick="imprimirCartoes()">Cartões de operação e pausa</button>
+      <button class="acao" onclick="imprimirCartoes()">Cartões de controle e pausa</button>
     </div>
   </div>
   </div>
@@ -607,6 +610,7 @@ let S = {cfg:{...CFG_PADRAO}, pessoas:PESSOAS_PADRAO, opsBase:OPS_BASE, metasVar
 let sel=null, pendingBase=null, pendingPacote=null, pendingTs=0, entradaMode=false;
 let travaBip=false, propostaAtual=null, lacPendente=null;
 let modoLote=false, loteItens=[];
+let opSelecionada=null, ultimaOpPessoa={};
 let seqTemp=[], seqTempM=[], tamsTempArr=[];
 
 /* ================= FIREBASE / SINCRONIZAÇÃO ================= */
@@ -808,7 +812,7 @@ function limparPend(){ pendingBase=null; pendingPacote=null; }
 
 /* ---- resolução de etapa por pacote ---- */
 function etapaResolvidaPacote(o,tam,n,idx){
-  return (o.resolvidos||[]).some(r=>r.tam===tam && String(r.n)===String(n) && r.etapaIdx===idx && (r.tipo==='fora'||r.tipo==='naoleva'||r.tipo==='aqui'));
+  return (o.resolvidos||[]).some(r=>r.tam===tam && String(r.n)===String(n) && r.etapaIdx===idx && (r.tipo==='fora'||r.tipo==='naoleva'||r.tipo==='aqui'||r.tipo==='herdado'));
 }
 function etapaOkPacote(o,tam,n,idx){
   return pacoteConcluido(o.num,tam,n,idx) || etapaEmAndamento(o.num,tam,n,idx) || etapaResolvidaPacote(o,tam,n,idx);
@@ -818,6 +822,40 @@ function primeiroGap(o,tam,n,ateIdx){
   return -1;
 }
 
+/* ---- seletor de pessoa e de operação ---- */
+function renderPessoaPicker(){
+  const box=document.getElementById('pessoaPicker'); if(!box) return;
+  const chips=S.pessoas.map(p=>{ const on=(sel===p.id);
+    return '<span class="chip'+(on?' sel-op':'')+'" onclick="selecionarPessoa(\''+p.id+'\')">'+p.nome+'</span>'; }).join('');
+  box.innerHTML='<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">'+
+    '<b>Funcionário</b><span class="mini-info">toque em quem vai fazer</span></div>'+
+    '<div class="chips" style="margin-top:8px;">'+(chips||'<span class="mini-info">Cadastre pessoas em Ajustes</span>')+'</div>';
+}
+function selecionarPessoa(id){ bip('C|'+id); renderPessoaPicker(); }
+function opBaseDoUltimoCiclo(pid){ const c=S.ciclos.filter(x=>x.pessoa===pid).slice(-1)[0]; return c? c.op : null; }
+function renderOpPicker(pessoaId){
+  const card=document.getElementById('opPickerCard'), box=document.getElementById('opPicker');
+  if(!card||!box) return;
+  if(!pessoaId){ card.style.display='none'; return; }
+  const nome=(S.pessoas.find(p=>p.id===pessoaId)||{}).nome||pessoaId;
+  const bases=[];
+  S.ordens.filter(o=>!statusOP(o).done).forEach(o=> (o.etapas||[]).forEach(e=>{ if(!bases.includes(e.base)) bases.push(e.base); }));
+  const lista = bases.length? bases : S.opsBase.map(o=>o.id);
+  if(opSelecionada && !lista.includes(opSelecionada)) lista.unshift(opSelecionada);
+  const chips=lista.map(b=>{ const nm=(S.opsBase.find(o=>o.id===b)||{}).nome||b; const on=(opSelecionada===b);
+    return '<span class="chip'+(on?' sel-op':'')+'" onclick="escolherOp(\''+b+'\')">'+nm+'</span>'; }).join('');
+  card.style.display='block';
+  box.innerHTML='<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">'+
+    '<b>Operação de '+nome+'</b><span class="mini-info">toque se mudou, depois bipe o pacote</span></div>'+
+    '<div class="chips" style="margin-top:8px;">'+chips+'</div>';
+}
+function escolherOp(base){
+  opSelecionada=base;
+  if(sel) renderOpPicker(sel);
+  const nm=(S.opsBase.find(o=>o.id===base)||{}).nome||base;
+  flash(true,'Operação: '+nm, sel? 'Agora bipe o pacote' : 'Bipe o crachá e o pacote');
+}
+
 /* ---- monta a proposta e abre a confirmação (não grava nada ainda) ---- */
 function proporCiclo(pessoaId, pk){
   const agora=Date.now();
@@ -825,51 +863,62 @@ function proporCiclo(pessoaId, pk){
   if(!pessoa){ flash(false,'Crachá não reconhecido',''); return; }
   const {num,tam,nPac,qtd}=pk;
   const o=S.ordens.find(x=>x.num===num);
+  // quantidade vem do cadastro do pacote (se existir), não do número impresso no QR.
+  // assim, se o pacote foi dividido (ex: 74 -> 56 + 18), a mesma etiqueta passa a valer 56 sozinha.
+  let qtdPac=Number(qtd);
+  if(o){ const _t=o.tamanhos.find(x=>x.tam===tam); const _p=_t&&_t.pacotes.find(x=>String(x.n)===String(nPac)); if(_p&&_p.qtd) qtdPac=_p.qtd; }
+  const baseHint = pendingBase || opSelecionada;
   let etapaIdx=-1, opKey, rotulo, base;
 
   if(o && o.etapas.length){
-    if(pendingBase){
-      etapaIdx=o.etapas.findIndex((e,i)=> e.base===pendingBase && !pacoteConcluido(num,tam,nPac,i));
-      if(etapaIdx<0) etapaIdx=o.etapas.findIndex(e=>e.base===pendingBase);
-      if(etapaIdx<0){ opKey=pendingBase; base=pendingBase; rotulo=(S.opsBase.find(x=>x.id===pendingBase)||{}).nome||pendingBase; }
+    if(baseHint){
+      etapaIdx=o.etapas.findIndex((e,i)=> e.base===baseHint && !pacoteConcluido(num,tam,nPac,i));
+      if(etapaIdx<0) etapaIdx=o.etapas.findIndex(e=>e.base===baseHint);
+      if(etapaIdx<0){ opKey=baseHint; base=baseHint; rotulo=(S.opsBase.find(x=>x.id===baseHint)||{}).nome||baseHint; }
     } else {
       etapaIdx=proximaEtapa(o,tam,nPac);
       if(etapaIdx<0){ flash(false,'Pacote já concluído','Todas as operações deste pacote estão feitas. Use um cartão de operação se for refazer.'); limparPend(); return; }
     }
     if(etapaIdx>=0){ const e=o.etapas[etapaIdx]; opKey=e.key; rotulo=e.rotulo; base=e.base; }
   } else {
-    base=pendingBase || (S.ciclos.filter(c=>c.pessoa===pessoaId).slice(-1)[0]||{}).op;
-    if(!base){ flash(false,'Falta a operação','Bipe o cartão da operação junto'); return; }
+    base=baseHint || (S.ciclos.filter(c=>c.pessoa===pessoaId).slice(-1)[0]||{}).op;
+    if(!base){ flash(false,'Falta a operação','Escolha a operação no seletor ou bipe o cartão'); return; }
     opKey=base; rotulo=(S.opsBase.find(x=>x.id===base)||{}).nome||base;
   }
 
-  // TRAVA: pacote nas mãos de alguém na MESMA etapa = recusa; etapa diferente = repasse válido
+  // TRAVA: mesma pessoa avança de operação no mesmo pacote; outra pessoa = recusa/repasse
   let repasseDe=null, fecharAoConfirmar=null;
   const aberto=S.ciclos.find(c=>!c.fim && c.ordem===num && c.tam===tam && String(c.pacote)===String(nPac));
   if(aberto){
-    if(aberto.pessoa===pessoaId){ flash(true,'Bip repetido ignorado', pessoa.nome+' já está nesse pacote'); limparPend(); return; }
-    const nomeOutro=(S.pessoas.find(x=>x.id===aberto.pessoa)||{}).nome||aberto.pessoa;
     const mesmaEtapa = (etapaIdx>=0 && etapaIdx===aberto.etapaIdx) || (etapaIdx<0 && base===aberto.op);
-    if(mesmaEtapa){ flash(false,'Pacote em outras mãos','Pacote '+nPac+' está com '+nomeOutro+' na mesma operação. Recusado.'); limparPend(); return; }
-    repasseDe=nomeOutro; fecharAoConfirmar=aberto.id;
+    if(aberto.pessoa===pessoaId){
+      // bip duplo (mesma operação) ou bip rápido demais = engano, ignora
+      if(mesmaEtapa || (agora-aberto.ini)<20000){ flash(true,'Bip repetido ignorado', pessoa.nome+' já está nesse pacote'); limparPend(); return; }
+      // operação diferente (ex: manga -> lateral): fecha a anterior e abre a nova, tudo com ela
+      fecharAoConfirmar=aberto.id;
+    } else {
+      const nomeOutro=(S.pessoas.find(x=>x.id===aberto.pessoa)||{}).nome||aberto.pessoa;
+      if(mesmaEtapa){ flash(false,'Pacote em outras mãos','Pacote '+nPac+' está com '+nomeOutro+' na mesma operação. Recusado.'); limparPend(); return; }
+      repasseDe=nomeOutro; fecharAoConfirmar=aberto.id;
+    }
   }
 
   // FLUXO OBRIGATÓRIO: etapa pulada abre a resolução antes de propor
   if(o && o.etapas.length && etapaIdx>=0){
     const gap=primeiroGap(o,tam,nPac,etapaIdx);
-    if(gap>=0){ abrirLacuna('sequencia', o, gap, {num,tam,nPac,qtd,pessoaId, alvo:rotulo}); return; }
+    if(gap>=0){ abrirLacuna('sequencia', o, gap, {num,tam,nPac,qtd:qtdPac,pessoaId, alvo:rotulo}); return; }
   }
 
   // MODO LOTE: em vez de abrir a confirmação, junta o pacote na lista do lote
   if(modoLote){
-    adicionarAoLote({pessoaId, pessoaNome:pessoa.nome, num, tam, nPac, qtd:Number(qtd), opKey, base, rotulo, etapaIdx, fecharAoConfirmar});
+    adicionarAoLote({pessoaId, pessoaNome:pessoa.nome, num, tam, nPac, qtd:qtdPac, opKey, base, rotulo, etapaIdx, fecharAoConfirmar});
     limparPend(); return;
   }
 
   // acumulado do dia nessa operação (inclui o ciclo aberto que vai fechar por troca)
   const hoje=new Date().toDateString();
   const doDiaOp=S.ciclos.filter(c=>c.pessoa===pessoaId && c.opKey===opKey && new Date(c.ini).toDateString()===hoje && !(c.ordem===num && c.tam===tam && String(c.pacote)===String(nPac)));
-  const acumTotal=doDiaOp.reduce((s,c)=>s+qtdEfetiva(c),0) + Number(qtd);
+  const acumTotal=doDiaOp.reduce((s,c)=>s+qtdEfetiva(c),0) + qtdPac;
   const media=baseline(pessoaId,opKey);
   const minPeca = media? 60/media : null;
   const etaTxt = media? fmtHora(agora + Number(qtd)/media*3600000) : '—';
@@ -878,25 +927,44 @@ function proporCiclo(pessoaId, pk){
   const tamAnterior = ultDaOp? ultDaOp.tam : null;
   const trocaTam = tamAnterior && tamAnterior!==tam;
 
-  propostaAtual={pessoaId, pessoaNome:pessoa.nome, num, tam, nPac, qtd:Number(qtd), opKey, base, rotulo,
+  propostaAtual={pessoaId, pessoaNome:pessoa.nome, num, tam, nPac, qtd:qtdPac, opKey, base, rotulo,
     rotuloCurto:(S.opsBase.find(x=>x.id===base)||{}).nome||rotulo, etapaIdx, acumTotal, media, minPeca, etaTxt,
     trocaTam, tamAnterior, repasseDe, fecharAoConfirmar};
   document.getElementById('confCorpo').innerHTML=montarConfCorpo(propostaAtual);
   mostrarModal('confModal');
 }
 function montarConfCorpo(p){
+  const retido = p.retido? p.retido.qtd : 0;
+  const efetiva = p.qtd - retido;
+  const acum = p.acumTotal - retido;
   let h='';
   h+='<div class="conf-nome">'+p.pessoaNome+'</div>';
   h+='<div class="conf-op">'+p.rotulo+'</div>';
-  h+='<div class="conf-pk">OP <b>'+p.num+'</b> · Tam <b>'+p.tam+'</b> · Pacote <b>'+p.nPac+'</b> · <b>'+p.qtd+'</b> peças</div>';
+  h+='<div class="conf-pk">OP <b>'+p.num+'</b> · Tam <b>'+p.tam+'</b> · Pacote <b>'+p.nPac+'</b> · <b>'+efetiva+'</b> peças'+(retido? ' <span style="color:#b23b3b;">(de '+p.qtd+')</span>':'')+'</div>';
   h+='<div class="conf-nums">'+
-     '<div class="num"><b>'+p.acumTotal+'</b><span>acumulado hoje · '+p.rotuloCurto+'</span></div>'+
+     '<div class="num"><b>'+acum+'</b><span>acumulado hoje · '+p.rotuloCurto+'</span></div>'+
      '<div class="num"><b>'+(p.media?Math.round(p.media):'—')+'</b><span>média pçs/h</span></div>'+
      '<div class="num"><b>'+(p.minPeca?p.minPeca.toFixed(2).replace('.',','):'—')+'</b><span>min por peça</span></div>'+
      '<div class="num"><b>'+p.etaTxt+'</b><span>previsão término</span></div></div>';
   if(p.repasseDe) h+='<div class="conf-aviso">↪ Repasse: ao confirmar, fecha o ciclo de <b>'+p.repasseDe+'</b> neste pacote e credita o tempo dele(a).</div>';
   if(p.trocaTam) h+='<div class="conf-aviso tam">⚠️ Trocando de tamanho: estava em '+p.tamAnterior+', este é '+p.tam+'.</div>';
+  if(retido) h+='<div class="conf-aviso tam">📦 '+retido+' peças retidas ('+p.retido.motivo+'). Vão virar o pacote '+p.nPac+'R, aguardando material. Este ciclo conta '+efetiva+'.</div>';
+  h+='<div style="margin-top:10px; text-align:center;"><button class="acao mini sec" onclick="reterPecas()">📦 Faltou material (reter peças)</button></div>';
   return h;
+}
+function reterPecas(){
+  const p=propostaAtual; if(!p) return;
+  const jaRet = p.retido? p.retido.qtd : 0;
+  const max = p.qtd - 1;
+  const q=Number(prompt('Quantas peças ficaram PARADAS por falta de material?\n(pacote tem '+p.qtd+' peças)', jaRet||''));
+  if(!q){ if(p.retido){ p.retido=null; document.getElementById('confCorpo').innerHTML=montarConfCorpo(p); } return; }
+  if(q<1 || q>max){ alert('Valor inválido. Entre 1 e '+max+'.'); return; }
+  const motivos=['Falta gola','Falta aviamento','Falta tecido','Outro'];
+  const m=prompt('Faltou o quê?\n'+motivos.map((x,i)=>(i+1)+' = '+x).join('\n')+'\nDigite o número (ou escreva o motivo):');
+  if(m===null) return;
+  const motivo = motivos[Number(m)-1] || limparTexto(m) || 'Falta material';
+  p.retido={qtd:q, motivo};
+  document.getElementById('confCorpo').innerHTML=montarConfCorpo(p);
 }
 function confirmarCiclo(){
   const p=propostaAtual; if(!p){ ocultarModais(); return; }
@@ -911,12 +979,32 @@ function confirmarCiclo(){
   // troca de pacote: fecha o ciclo aberto da própria pessoa em outro pacote
   const proprio=ciclosAbertos(p.pessoaId).find(c=>!(c.ordem===p.num && c.tam===p.tam && String(c.pacote)===String(p.nPac)));
   if(proprio) fecharCiclo(proprio, agora - S.cfg.troca*60000, 'bip');
+  const retido = p.retido && p.retido.qtd>0 ? p.retido.qtd : 0;
+  const efetiva = p.qtd - retido;
   S.ciclos.push({id:agora+'-'+p.pessoaId, pessoa:p.pessoaId, op:(p.opKey||'').split('|')[0], opKey:p.opKey, rotulo:p.rotulo,
-    etapaIdx:p.etapaIdx, ordem:p.num, tam:p.tam, pacote:p.nPac, qtd:p.qtd, ini:agora, pausas:[],
+    etapaIdx:p.etapaIdx, ordem:p.num, tam:p.tam, pacote:p.nPac, qtd:efetiva, ini:agora, pausas:[],
     trocaTam:p.trocaTam? {de:p.tamAnterior, para:p.tam} : null});
-  flash(true, p.pessoaNome+' · '+p.rotulo, 'OP '+p.num+' · '+p.tam+'-'+p.nPac+' · '+p.qtd+' peças · acumulado '+p.acumTotal);
+  // peças retidas: reduz este pacote e cria um pacote separado aguardando material
+  if(retido && o){
+    const t=o.tamanhos.find(x=>x.tam===p.tam);
+    const pac=t && t.pacotes.find(x=>String(x.n)===String(p.nPac));
+    if(pac){
+      pac.qtd = efetiva; // o pacote original agora é 56
+      let novoN = p.nPac+'R'; let k=2; while(t.pacotes.some(x=>String(x.n)===String(novoN))){ novoN=p.nPac+'R'+k; k++; }
+      t.pacotes.push({n:novoN, qtd:retido, aguardando:{motivo:p.retido.motivo, desde:agora, etapaIdx:p.etapaIdx, origem:p.nPac}});
+      // as 18 já fizeram as etapas anteriores junto do pacote original: marca como herdadas
+      o.resolvidos=o.resolvidos||[];
+      for(let j=0;j<p.etapaIdx;j++) o.resolvidos.push({tam:p.tam, n:novoN, etapaIdx:j, tipo:'herdado', qtd:retido, quando:agora});
+      o.chegadas.push({tam:p.tam, n:novoN, ts:agora});
+    }
+  }
+  // se este pacote estava aguardando material e foi bipado agora, libera
+  if(o){ const tt=o.tamanhos.find(x=>x.tam===p.tam); const pp=tt&&tt.pacotes.find(x=>String(x.n)===String(p.nPac)); if(pp&&pp.aguardando) delete pp.aguardando; }
+  flash(true, p.pessoaNome+' · '+p.rotulo, 'OP '+p.num+' · '+p.tam+'-'+p.nPac+' · '+efetiva+' peças'+(retido?' · '+retido+' retidas ('+p.nPac+'R)':''));
+  ultimaOpPessoa[p.pessoaId]=p.base; opSelecionada=p.base;
   propostaAtual=null; limparPend();
   ocultarModais(); salvarTudo(); renderTudo();
+  if(sel) renderOpPicker(sel);
 }
 function cancelarCiclo(){
   propostaAtual=null; limparPend(); ocultarModais();
@@ -1080,6 +1168,8 @@ function bip(code){
     if(!p) return flash(false,'Crachá não reconhecido',code);
     if(entradaMode) alternarEntrada();
     sel=p.id;
+    opSelecionada = ultimaOpPessoa[p.id] || opBaseDoUltimoCiclo(p.id) || null;
+    renderOpPicker(p.id);
     // ordem nova: pacote (e operação) já bipados -> inicia agora
     if(pendingPacote){ proporCiclo(p.id, pendingPacote); return; }
     const ab=ciclosAbertos(p.id)[0];
@@ -1557,8 +1647,8 @@ function imprimirEtiquetas(num){
 }
 function imprimirCrachas(){ montarImpressao(S.pessoas.map(p=>etiquetaHTML('C|'+p.id,p.nome.toUpperCase(),'Crachá pessoal','')).join('')); }
 function imprimirCartoes(){
-  let html=S.opsBase.map(o=>etiquetaHTML('O|'+o.id,o.nome.toUpperCase(),'Cartão de operação','')).join('');
-  Object.entries(PAUSAS).forEach(([k,v])=> html+=etiquetaHTML('X|'+k,(k==='CONSERTO'?'🔧 ':'⏸ ')+v.toUpperCase(),'Bipe o crachá ao voltar',''));
+  let html='';
+  Object.entries(PAUSAS).forEach(([k,v])=> html+=etiquetaHTML('X|'+k,(k==='CONSERTO'?'🔧 ':'⏸ ')+v.toUpperCase(),'Selecione o funcionário na tela ao voltar',''));
   html+=etiquetaHTML('X|ENTRADA','📦 ENTRADA DE PACOTES','Liga/desliga o modo entrada: bipe e depois bipe os pacotes que chegaram','');
   html+=etiquetaHTML('X|SEMSERVICO','SEM SERVIÇO','Fecha o ciclo, tempo não conta contra a pessoa','');
   html+=etiquetaHTML('X|FIM','ENCERRAR CICLO','Fecha o pacote atual agora','');
@@ -1616,7 +1706,29 @@ function renderPainelOps(){
       empac.map(x=>'<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;"><span class="mini-info">OP '+x.num+' · '+x.tam+'-'+x.n+' ('+x.qtd+' pçs) parou antes de <b>'+x.rotulo+'</b> · desde '+fmtHora(x.desde)+'</span>'+
       '<button class="acao mini" onclick="resolverEmpacado(\''+x.num+'\',\''+x.tam+'\',\''+x.n+'\','+x.qtd+','+x.etapaIdx+')">Resolver</button></div>').join('')+'</div></div>';
   }
-  alertasAbastecimento.innerHTML = hEmp + (avisos.length? '<div class="card alertbox"><b>Atenção no abastecimento</b><div class="mini-info" style="margin-top:6px;">'+avisos.join('<br>')+'</div></div>' : '');
+  // peças retidas aguardando material
+  const aguard=[];
+  S.ordens.forEach(o=> o.tamanhos.forEach(t=> t.pacotes.forEach(pac=>{ if(pac.aguardando) aguard.push({num:o.num, tam:t.tam, n:pac.n, qtd:pac.qtd, motivo:pac.aguardando.motivo, desde:pac.aguardando.desde, etapa:(o.etapas[pac.aguardando.etapaIdx]||{}).rotulo||''}); })));
+  let hAg='';
+  if(aguard.length){
+    hAg='<div class="card alertbox"><b>📦 Peças retidas aguardando material</b><div style="margin-top:8px; display:flex; flex-direction:column; gap:8px;">'+
+      aguard.map(x=>'<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;"><span class="mini-info">OP '+x.num+' · pacote <b>'+x.tam+'-'+x.n+'</b> ('+x.qtd+' pçs) · '+x.motivo+' · parou na '+x.etapa+' · desde '+fmtHora(x.desde)+'</span>'+
+      '<span><button class="acao mini sec" onclick="imprimirEtiquetaPacote(\''+x.num+'\',\''+x.tam+'\',\''+x.n+'\')">Etiqueta</button> '+
+      '<button class="acao mini" onclick="liberarRetido(\''+x.num+'\',\''+x.tam+'\',\''+x.n+'\')">Material chegou (liberar)</button></span></div>').join('')+'</div></div>';
+  }
+  alertasAbastecimento.innerHTML = hAg + hEmp + (avisos.length? '<div class="card alertbox"><b>Atenção no abastecimento</b><div class="mini-info" style="margin-top:6px;">'+avisos.join('<br>')+'</div></div>' : '');
+}
+function imprimirEtiquetaPacote(num,tam,n){
+  const o=S.ordens.find(x=>x.num===num); if(!o) return;
+  const t=o.tamanhos.find(x=>x.tam===tam); const p=t&&t.pacotes.find(x=>String(x.n)===String(n)); if(!p) return;
+  montarImpressao(etiquetaHTML('K|'+num+'|'+tam+'|'+p.n+'|'+p.qtd,'OP '+num+' · TAM '+tam,'Pacote '+p.n+' (retido)',p.qtd+' peças'));
+}
+function liberarRetido(num,tam,n){
+  const o=S.ordens.find(x=>x.num===num); if(!o) return;
+  const t=o.tamanhos.find(x=>x.tam===tam); const pac=t&&t.pacotes.find(x=>String(x.n)===String(n));
+  if(pac&&pac.aguardando){ delete pac.aguardando; salvarTudo(); renderTudo(); flash(true,'Liberado','Pacote '+tam+'-'+n+' pronto pra bipar quando fizerem');
+    if(confirm('Imprimir a etiqueta do pacote '+tam+'-'+n+' ('+pac.qtd+' pçs) agora?')) imprimirEtiquetaPacote(num,tam,n);
+  }
 }
 function renderPainel(){
   const agora=Date.now();
@@ -2065,7 +2177,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.5.0';
+const VERSAO = '3.8.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2145,7 +2257,7 @@ document.querySelectorAll('nav button').forEach(b=>{
     renderTudo();
   });
 });
-function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); }
+function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); }
 /* atalhos: Enter confirma, Esc cancela nos modais */
 document.addEventListener('keydown', e=>{
   const conf=document.getElementById('confModal'), lac=document.getElementById('lacModal');
@@ -2157,7 +2269,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
