@@ -227,6 +227,7 @@ nav button.oculto{display:none;}
     <div id="leitorCam" style="max-width:340px; margin:12px auto 0; border-radius:12px; overflow:hidden;"></div>
   </div>
   <div class="card" id="lotePanel" style="display:none; margin-top:14px;"></div>
+  <div class="card" id="desfazerBar" style="display:none; align-items:center; gap:10px; margin-top:14px; background:#fff;"></div>
   <div class="card" style="margin-top:14px;">
     <div style="display:flex; justify-content:space-between; align-items:center;">
       <h2 style="margin:0;">Modo teste (toque para simular)</h2>
@@ -315,6 +316,8 @@ nav button.oculto{display:none;}
 <!-- ============ OPS ============ -->
 <section class="tela" id="t-ops">
   <button class="acao" id="btnNovaOP" onclick="formOP.classList.toggle('aberto'); this.textContent=formOP.classList.contains('aberto')?'✕ Fechar cadastro':'➕ Cadastrar nova OP';" style="margin-bottom:12px;">➕ Cadastrar nova OP</button>
+  <button class="acao sec" onclick="importarNotaClick()" style="margin-bottom:12px; margin-left:8px;">📄 Importar nota fiscal (XML)</button>
+  <input type="file" id="notaFile" accept=".xml,text/xml,application/xml" multiple style="display:none;" onchange="importarNotaXML(this.files)">
   <div class="card form-recolhido" id="formOP">
     <h2 style="margin-top:0;">Cadastrar OP</h2>
     <div class="linhaform">
@@ -326,6 +329,7 @@ nav button.oculto{display:none;}
     </div>
     <div class="linhaform">
       <div><label>Tamanho</label><input id="opTam" placeholder="G" style="width:70px;"></div>
+      <div><label>Cor</label><input id="opCor" placeholder="Preto" style="width:110px;"></div>
       <div><label>Tonalidade/lote (opcional)</label><input id="opTon" placeholder="L1, amarelo..." style="width:130px;"></div>
       <div><label>Divisão dos pacotes</label><select id="opModoPct" onchange="mudarModoPacote()"><option value="padrao">Dividir igual (padrão)</option><option value="manual">Pacote a pacote</option></select></div>
       <div id="campoTotal"><label>Total de peças</label><input id="opQtd" type="number" placeholder="354" style="width:110px;"></div>
@@ -459,6 +463,11 @@ nav button.oculto{display:none;}
     <h2 style="margin-top:0;">Operações base e metas (peças/hora)</h2>
     <div class="mini-info" style="margin-bottom:8px;">Metas por variação específica podem ser definidas na Calibração (aba Relatórios). Aqui ficam as bases.</div>
     <table id="tabOperacoes"></table>
+    <div style="margin-top:12px; display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+      <div><label>Nova operação</label><input id="novaOpNome" placeholder="Ex: Vira boca, Travete..." style="width:200px;"></div>
+      <button class="acao sec" onclick="addOpBase()">➕ Adicionar operação</button>
+    </div>
+    <div class="mini-info" style="margin-top:6px;">As metas você acerta depois direto na linha. A operação nova já aparece na sequência das marcas e no seletor de bipagem.</div>
   </div>
   </div>
   <div class="sub" id="sub-aj-impressao">
@@ -693,7 +702,7 @@ async function carregar(){
   const v=await lerDados();
   if(v){ try{ const d=JSON.parse(v); S=Object.assign(S,d); }catch(e){} }
   // migrações
-  if(!S.opsBaseRev || S.opsBaseRev < 4){ S.opsBase = OPS_BASE; S.opsBaseRev = 4; }
+  if(!S.opsBaseRev || S.opsBaseRev < 4){ const extras=(S.opsBase||[]).filter(o=>o&&o.extra); S.opsBase = OPS_BASE.concat(extras); S.opsBaseRev = 4; }
   S.marcas=S.marcas||[]; S.metasVar=S.metasVar||{};
   (S.ordens||[]).forEach(o=>{ o.etapas=o.etapas||[]; o.externos=o.externos||[]; o.chegadas=o.chegadas||[]; o.resolvidos=o.resolvidos||[]; });
   if(S.cfg.empacadoMin===undefined) S.cfg.empacadoMin=45;
@@ -966,10 +975,13 @@ function reterPecas(){
   p.retido={qtd:q, motivo};
   document.getElementById('confCorpo').innerHTML=montarConfCorpo(p);
 }
+let ultimaAcao=null;
 function confirmarCiclo(){
   const p=propostaAtual; if(!p){ ocultarModais(); return; }
   const agora=Date.now();
   const o=S.ordens.find(x=>x.num===p.num);
+  const _snap={ ciclos:S.ciclos.map(c=>({id:c.id, fim:c.fim, rateEfetivo:c.rateEfetivo})), op:o?JSON.parse(JSON.stringify(o)):null, opNum:p.num,
+    ultimaOp:{...ultimaOpPessoa}, opSel:opSelecionada };
   if(o && !pacoteChegou(o,p.tam,p.nPac)) o.chegadas.push({tam:p.tam, n:p.nPac, ts:agora}); // entrada implícita
   // repasse: fecha o ciclo de quem estava com o pacote na etapa anterior
   if(p.fecharAoConfirmar){
@@ -1002,9 +1014,27 @@ function confirmarCiclo(){
   if(o){ const tt=o.tamanhos.find(x=>x.tam===p.tam); const pp=tt&&tt.pacotes.find(x=>String(x.n)===String(p.nPac)); if(pp&&pp.aguardando) delete pp.aguardando; }
   flash(true, p.pessoaNome+' · '+p.rotulo, 'OP '+p.num+' · '+p.tam+'-'+p.nPac+' · '+efetiva+' peças'+(retido?' · '+retido+' retidas ('+p.nPac+'R)':''));
   ultimaOpPessoa[p.pessoaId]=p.base; opSelecionada=p.base;
+  ultimaAcao={ snap:_snap, novoId:agora+'-'+p.pessoaId, resumo:p.pessoaNome+' · '+p.rotulo+' · '+p.tam+'-'+p.nPac+' ('+efetiva+' pç)' };
   propostaAtual=null; limparPend();
   ocultarModais(); salvarTudo(); renderTudo();
   if(sel) renderOpPicker(sel);
+}
+function desfazerUltimo(){
+  const a=ultimaAcao; if(!a) return;
+  if(!confirm('Desfazer o último registro?\n\n'+a.resumo)) return;
+  S.ciclos=S.ciclos.filter(c=>c.id!==a.novoId);
+  const mapa={}; a.snap.ciclos.forEach(c=>mapa[c.id]=c);
+  S.ciclos.forEach(c=>{ if(mapa[c.id]){ c.fim=mapa[c.id].fim; c.rateEfetivo=mapa[c.id].rateEfetivo; } });
+  if(a.snap.op){ const idx=S.ordens.findIndex(o=>o.num===a.snap.opNum); if(idx>=0) S.ordens[idx]=a.snap.op; }
+  ultimaOpPessoa=a.snap.ultimaOp||{}; opSelecionada=a.snap.opSel||null;
+  ultimaAcao=null;
+  salvarTudo(); renderTudo(); if(sel) renderOpPicker(sel);
+  flash(true,'Desfeito','O último registro foi removido.');
+}
+function renderDesfazer(){
+  const bar=document.getElementById('desfazerBar'); if(!bar) return;
+  if(ultimaAcao){ bar.style.display='flex'; bar.innerHTML='<span style="flex:1;">Último: <b>'+ultimaAcao.resumo+'</b></span><button class="acao mini" onclick="desfazerUltimo()">↩ Desfazer</button>'; }
+  else bar.style.display='none';
 }
 function cancelarCiclo(){
   propostaAtual=null; limparPend(); ocultarModais();
@@ -1417,9 +1447,11 @@ function mudarModoPacote(){
   document.getElementById('campoManual').style.display=manual?'':'none';
 }
 function addTamTemp(){
-  let tam=limparTexto(opTam.value).toUpperCase();
-  const ton=limparTexto(opTon.value).toUpperCase();
-  if(!tam) return alert('Preencha o tamanho.');
+  const semSep = s=>String(s||'').replace(/[|·]/g,' ').replace(/\s+/g,' ').trim();
+  let tamBase=semSep(limparTexto(opTam.value)).toUpperCase();
+  const cor=semSep(limparTexto(opCor.value));
+  const ton=semSep(limparTexto(opTon.value)).toUpperCase();
+  if(!tamBase) return alert('Preencha o tamanho.');
   const manual=document.getElementById('opModoPct').value==='manual';
   let pacotes, total;
   if(manual){
@@ -1433,14 +1465,72 @@ function addTamTemp(){
     pacotes=dividirPacotes(q,p).map((x,i)=>({n:i+1,qtd:x}));
     total=q;
   }
-  if(ton) tam=tam+'·'+ton;
+  const tam=[cor, tamBase, ton].filter(Boolean).join('·');
   tamsTempArr=tamsTempArr.filter(t=>t.tam!==tam);
-  tamsTempArr.push({tam, total, pacotes});
-  opTam.value=''; opQtd.value=''; opTon.value=''; if(document.getElementById('opPctLista')) opPctLista.value='';
+  tamsTempArr.push({tam, tamBase, cor, ton, total, pacotes});
+  opTam.value=''; opQtd.value=''; opTon.value=''; opCor.value=''; if(document.getElementById('opPctLista')) opPctLista.value='';
   renderTamsTemp();
 }
 function renderTamsTemp(){
-  tamsTemp.innerHTML=tamsTempArr.map((t,i)=>'<span class="chip">'+t.tam+': '+t.total+' pçs ('+t.pacotes.map(p=>p.qtd).join('+')+') <b style="cursor:pointer;" onclick="tamsTempArr.splice('+i+',1); renderTamsTemp();">✕</b></span>').join('');
+  tamsTemp.innerHTML=tamsTempArr.map((t,i)=>'<span class="chip">'+(t.cor?'<b style="color:var(--verde);">'+t.cor+'</b> ':'')+(t.tamBase||t.tam)+(t.ton?'·'+t.ton:'')+': '+t.total+' pçs ('+t.pacotes.map(p=>p.qtd).join('+')+') <b style="cursor:pointer;" onclick="tamsTempArr.splice('+i+',1); renderTamsTemp();">✕</b></span>').join('');
+}
+/* ---- Importador de nota fiscal (NF-e XML) ---- */
+function nfeBusca(root,nome){ const fila=[root]; while(fila.length){ const n=fila.shift(); if(n.localName===nome) return n; for(const c of n.children) fila.push(c); } return null; }
+function nfeTodos(root,nome){ const out=[]; const fila=[root]; while(fila.length){ const n=fila.shift(); if(n.localName===nome) out.push(n); for(const c of n.children) fila.push(c); } return out; }
+function nfeCap(s){ return String(s||'').toLowerCase().replace(/(^|\s)\S/g,c=>c.toUpperCase()).trim(); }
+function parseNFe(xmlText){
+  const doc=new DOMParser().parseFromString(xmlText,'application/xml');
+  if(doc.querySelector('parsererror')) throw new Error('arquivo não é um XML válido');
+  const root=doc.documentElement;
+  const txt=el=> el? el.textContent.trim() : '';
+  const nNF=txt(nfeBusca(root,'nNF'));
+  const emit=nfeBusca(root,'emit'); const cliente=nfeCap(txt(nfeBusca(emit||root,'xNome')));
+  const infCpl=txt(nfeBusca(root,'infCpl'));
+  let op=''; const mOp=infCpl.match(/OP\(?S?\)?\s*RELACIONADAS?[:\s]*([0-9]+)/i); if(mOp) op=mOp[1];
+  const itens=[];
+  nfeTodos(root,'det').forEach(det=>{
+    const prod=nfeBusca(det,'prod'); if(!prod) return;
+    const xProd=txt(nfeBusca(prod,'xProd')); const cProd=txt(nfeBusca(prod,'cProd'));
+    const q=parseFloat(txt(nfeBusca(prod,'qCom'))||'0'); if(!q) return;
+    let cor=''; const mCor=xProd.match(/\*\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ /]*?)\s*(?:-|$)/); if(mCor) cor=nfeCap(mCor[1]);
+    let tam=''; const partes=xProd.split(/\s+-\s+/); if(partes.length) tam=partes[partes.length-1].trim();
+    if(!/^[A-Za-z0-9]{1,4}$/.test(tam)){ const cp=cProd.split('.'); tam=(cp[cp.length-1]||'').trim(); }
+    itens.push({cor, tam:tam.toUpperCase(), qtd:Math.round(q), produto:xProd});
+  });
+  return {nf:nNF, cliente, op, infCpl, itens};
+}
+function importarNotaClick(){ if(!podeEditar()) return alert('Só o gestor importa notas.'); const f=document.getElementById('notaFile'); f.value=''; f.click(); }
+async function importarNotaXML(files){
+  if(!files||!files.length) return;
+  try{
+    let cliente='', op='', nfs=[], produto='', mapa={};
+    for(const file of files){
+      const d=parseNFe(await file.text());
+      if(!cliente) cliente=d.cliente; if(!op) op=d.op; if(d.nf) nfs.push(d.nf);
+      d.itens.forEach(it=>{ if(!produto&&it.produto) produto=it.produto.split(/\s+-\s+/)[0].trim();
+        const k=it.cor+'|'+it.tam; if(!mapa[k]) mapa[k]={cor:it.cor,tam:it.tam,qtd:0}; mapa[k].qtd+=it.qtd; });
+    }
+    const itens=Object.values(mapa).filter(i=>i.tam);
+    if(!itens.length) return alert('Não encontrei itens com tamanho nessa nota. Confira o arquivo ou cadastre manual.');
+    const ppTxt=prompt('Peças por pacote? (padrão 70)\nVocê pode ajustar cada tamanho depois.','70');
+    if(ppTxt===null) return;
+    const pp=Number(ppTxt)||70;
+    if(!formOP.classList.contains('aberto')){ formOP.classList.add('aberto'); document.getElementById('btnNovaOP').textContent='✕ Fechar cadastro'; }
+    if(op) opNum.value=op; if(cliente) opCliente.value=cliente;
+    tamsTempArr=[];
+    const ordem=['PP','P','M','G','GG','XG','XGG','EG','EGG'];
+    itens.sort((a,b)=>{ const ia=ordem.indexOf(a.tam), ib=ordem.indexOf(b.tam); return (ia<0?99:ia)-(ib<0?99:ib); });
+    itens.forEach(it=>{
+      const pacs=dividirPacotes(it.qtd,pp).map((x,i)=>({n:i+1,qtd:x}));
+      const tam=[it.cor,it.tam].filter(Boolean).join('·');
+      tamsTempArr.push({tam, tamBase:it.tam, cor:it.cor, ton:'', total:it.qtd, pacotes:pacs});
+    });
+    renderTamsTemp();
+    document.querySelector('nav button[data-t="ops"]').click();
+    setTimeout(()=>{ try{ formOP.scrollIntoView({behavior:'smooth',block:'start'}); }catch(e){} }, 150);
+    const totalPecas=itens.reduce((a,b)=>a+b.qtd,0);
+    alert('Nota importada.\n\nCliente: '+(cliente||'(defina)')+'\nOP: '+(op||'(defina o número)')+'\nProduto: '+(produto||'-')+'\nNota(s): '+nfs.join(', ')+'\nTotal: '+totalPecas+' peças · '+itens.length+' cor(es)/tamanho(s)\n\nJá preenchi o cadastro. Agora escolha a marca/sequência de operações, confira e toque em Salvar OP.');
+  }catch(e){ alert('Não consegui ler a nota: '+e.message); }
 }
 function salvarOP(){
   if(!podeEditar()) return alert('Só o gestor cadastra ou altera OPs.');
@@ -1637,11 +1727,12 @@ function montarImpressao(html){
   areaImpressao.querySelectorAll('.qr').forEach(el=>{ new QRCode(el,{text:el.dataset.code,width:110,height:110,correctLevel:QRCode.CorrectLevel.M}); });
   setTimeout(()=>window.print(),400);
 }
+function descTam(t){ return (t.cor?t.cor+' ':'')+(t.tamBase||t.tam)+(t.ton?' · '+t.ton:''); }
 function imprimirEtiquetas(num){
   const o=S.ordens.find(x=>x.num===num); if(!o) return;
   let html='';
   o.tamanhos.forEach(t=> t.pacotes.forEach(p=>{
-    html+=etiquetaHTML('K|'+num+'|'+t.tam+'|'+p.n+'|'+p.qtd,'OP '+num+' · TAM '+t.tam,'Pacote '+p.n+' de '+t.pacotes.length,p.qtd+' peças');
+    html+=etiquetaHTML('K|'+num+'|'+t.tam+'|'+p.n+'|'+p.qtd,'OP '+num+(t.cor?' · '+t.cor:''),(t.tamBase||t.tam)+(t.ton?' · '+t.ton:'')+' · Pacote '+p.n+' de '+t.pacotes.length,p.qtd+' peças');
   }));
   montarImpressao(html);
 }
@@ -2126,6 +2217,33 @@ function salvarCfg(){
     empacadoMin:Number(ce&&ce.value)||45});
   salvarTudo(); alert('Regras salvas.');
 }
+function addOpBase(){
+  if(!podeEditar()) return alert('Só o gestor mexe nas operações.');
+  const nome=limparTexto(document.getElementById('novaOpNome').value);
+  if(!nome) return alert('Digite o nome da operação.');
+  const idDe=t=>t.toUpperCase().normalize('NFD').replace(/[^A-Z0-9]/g,'');
+  let id=idDe(nome); if(!id) id='OP';
+  if(S.opsBase.some(o=>o.id===id)){ let k=2; while(S.opsBase.some(o=>o.id===id+k)) k++; id=id+k; }
+  S.opsBase.push({id, nome, metas:[0,0,0,0], extra:true});
+  document.getElementById('novaOpNome').value='';
+  salvarTudo(); renderTudo();
+}
+function setMetaBase(id,idx,val){
+  const o=S.opsBase.find(x=>x.id===id); if(!o) return;
+  o.metas[idx]=Math.max(0, Math.round(Number(val)||0));
+  salvarTudo();
+}
+function removerOpBase(id){
+  const o=S.opsBase.find(x=>x.id===id); if(!o||!o.extra) return;
+  const usadaMarca=(S.marcas||[]).some(m=>(m.etapas||[]).some(e=>e.base===id));
+  const usadaOP=(S.ordens||[]).some(x=>(x.etapas||[]).some(e=>e.base===id));
+  const usadaCiclo=(S.ciclos||[]).some(c=>c.op===id);
+  let aviso='Remover a operação "'+o.nome+'"?';
+  if(usadaMarca||usadaOP||usadaCiclo) aviso+='\n\nAtenção: ela já está sendo usada em marca, OP ou histórico. Remover pode bagunçar esses registros.';
+  if(!confirm(aviso)) return;
+  S.opsBase=S.opsBase.filter(x=>x.id!==id);
+  salvarTudo(); renderTudo();
+}
 function addPessoa(){
   let n=limparTexto(novaPessoa.value); if(!n) return;
   const idDe = txt=>txt.toUpperCase().normalize('NFD').replace(/[^A-Z0-9]/g,'');
@@ -2151,8 +2269,12 @@ function editarFone(id){
 }
 function renderAjustes(){
   listaPessoas.innerHTML=S.pessoas.map(p=>'<span class="chip" style="cursor:pointer;" onclick="editarFone(\''+p.id+'\')">'+p.nome+(p.fone?' 📱':' <span style=color:var(--f-abx)>sem WhatsApp</span>')+'</span>').join('');
-  tabOperacoes.innerHTML='<tr><th>Operação</th><th>70%</th><th>80%</th><th>90%</th><th>100%</th></tr>'+
-    S.opsBase.map(o=>'<tr><td><b>'+o.nome+'</b></td><td>'+o.metas.join('</td><td>')+'</td></tr>').join('');
+  tabOperacoes.innerHTML='<tr><th>Operação</th><th>70%</th><th>80%</th><th>90%</th><th>100%</th><th></th></tr>'+
+    S.opsBase.map(o=>{
+      const metas=o.metas.map((m,j)=>'<td><input type="number" value="'+m+'" style="width:60px;" onchange="setMetaBase(\''+o.id+'\','+j+',this.value)"></td>').join('');
+      const acao=o.extra?'<td><b title="Remover" style="color:#b23b3b;cursor:pointer;" onclick="removerOpBase(\''+o.id+'\')">✕</b></td>':'<td></td>';
+      return '<tr><td><b>'+o.nome+'</b>'+(o.extra?' <span class="mini-info">(sua)</span>':'')+'</td>'+metas+acao+'</tr>';
+    }).join('');
   fPessoa.innerHTML='<option value="">Todas</option>'+S.pessoas.map(p=>'<option value="'+p.id+'">'+p.nome+'</option>').join('');
   const rp=rPessoa; const at=rp.value;
   rp.innerHTML=S.pessoas.map(p=>'<option value="'+p.id+'">'+p.nome+'</option>').join('');
@@ -2185,7 +2307,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.8.1';
+const VERSAO = '3.12.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2270,7 +2392,7 @@ document.querySelectorAll('nav button').forEach(b=>{
     renderTudo();
   });
 });
-function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); }
+function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); }
 /* atalhos: Enter confirma, Esc cancela nos modais */
 document.addEventListener('keydown', e=>{
   const conf=document.getElementById('confModal'), lac=document.getElementById('lacModal');
@@ -2282,7 +2404,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
