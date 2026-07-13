@@ -616,10 +616,11 @@ const OPS_BASE = [
  {id:'BAINHAMANGA', nome:'Bainha manga', metas:[90,110,120,140]},
  {id:'BAINHABARRA', nome:'Bainha barra', metas:[120,140,160,180]},
  {id:'REVISAO', nome:'Revisão', metas:[80,90,95,100]},
- // --- LATERAL: variações. A tabela oficial só tem a lateral simples.
- // As demais estão com meta zerada de propósito, pra calibrar pela média real. ---
+ // --- LATERAL: a tabela oficial tem UMA linha (75/80/90/100), que vale para
+ // "lateral sem etiqueta" e "lateral com 1 etiqueta". As demais variações não têm
+ // meta na tabela: ficam zeradas de propósito, pra calibrar pela média real. ---
  {id:'LATERAL', nome:'Lateral (sem etiqueta)', metas:[75,80,90,100]},
- {id:'LATERAL1ETIQ', nome:'Lateral com 1 etiqueta', metas:[0,0,0,0]},
+ {id:'LATERAL1ETIQ', nome:'Lateral com 1 etiqueta', metas:[75,80,90,100]},
  {id:'LATERAL2ETIQ', nome:'Lateral com 2 etiquetas', metas:[0,0,0,0]},
  {id:'LATERAL3ETIQ', nome:'Lateral com 3 etiquetas', metas:[0,0,0,0]},
  {id:'LATERALARREMATE', nome:'Lateral com arremate (sem etiqueta)', metas:[0,0,0,0]},
@@ -697,7 +698,7 @@ const BASELINES_PADRAO = {
 const CFG_PADRAO = {ini:'05:00', fim:'14:30', fimSex:'13:30', cafeIni:'08:30', cafeFim:'09:00', cafeTol:5, troca:3, anom:55, filaBaixa:70};
 
 function migrarOpsBase(){
-  if(S.opsBaseRev >= 5) return;
+  if(S.opsBaseRev >= 6) return;
   const extras=(S.opsBase||[]).filter(o=>o&&o.extra);
   // preserva as metas que o gestor já ajustou nas operações do sistema
   const antigas={}; (S.opsBase||[]).forEach(o=>{ if(o&&!o.extra && o.metas && o.metas.some(m=>m>0)) antigas[o.id]=o.metas; });
@@ -705,7 +706,7 @@ function migrarOpsBase(){
   // o mapeamento antigo foi feito com a lógica errada (casava "lateral com 2 etiqueta" com "Etiqueta"):
   // joga fora pra ser refeito na tela de conferência
   S.mapaOps = {};
-  S.opsBaseRev = 5;
+  S.opsBaseRev = 6;
 }
 let S = {cfg:{...CFG_PADRAO}, pessoas:PESSOAS_PADRAO, opsBase:OPS_BASE, metasVar:{}, baselines:BASELINES_PADRAO, marcas:[], ordens:[], ciclos:[]};
 let sel=null, pendingBase=null, pendingPacote=null, pendingTs=0, entradaMode=false;
@@ -848,17 +849,8 @@ function refPonderada(opId){
 }
 function faixaDe(opKey, rate){
   const [m70,m80,m90,m100]=metasDe(opKey);
-  if(!m70){
-    // sem meta ainda: compara com a média ponderada do grupo (ex: todas as laterais)
-    const base=opKey.split('|')[0];
-    const ref=refPonderada(base);
-    if(ref && ref.media>0){
-      const p=Math.round(rate/ref.media*100);
-      const cls = p>=110? 'fx-100' : p>=100? 'fx-90' : p>=90? 'fx-80' : p>=80? 'fx-70' : 'fx-abx';
-      return {tx:p+'% da referência', cls, ref:Math.round(ref.media)};
-    }
-    return {tx:'meta a definir', cls:''};
-  }
+  // sem meta definida: NÃO inventa porcentagem. Porcentagem só existe contra a meta 70/80/90/100.
+  if(!m70) return {tx:'meta a definir', cls:''};
   if(rate>=m100) return {tx:'100%', cls:'fx-100'};
   if(rate>=m90) return {tx:'90%', cls:'fx-90'};
   if(rate>=m80) return {tx:'80%', cls:'fx-80'};
@@ -2734,7 +2726,7 @@ function renderCalibra(){
   if(ref) topo+='<div class="callout-ref" style="background:#fff; border-left:4px solid var(--dourado,#c7a581); padding:8px 10px; border-radius:4px; margin-bottom:10px; font-size:13px;">'+
     '<b>Referência das laterais (ponderada):</b> '+Math.round(ref.media)+' pçs/h '+
     '<span class="mini-info">('+ref.pcs+' peças ÷ '+ref.horas.toFixed(1)+' h, somando todas as variações de lateral)</span><br>'+
-    '<span class="mini-info">Enquanto a variação não tem meta própria, a faixa é calculada contra essa referência.</span></div>';
+    '<span class="mini-info">Serve só pra enxergar quais variações são mais lentas. Faixa (70/80/90/100) só existe quando a operação tem meta.</span></div>';
   if(prontas) topo+='<div style="background:#eef5e6; border-left:4px solid #4d7c2a; padding:8px 10px; border-radius:4px; margin-bottom:10px; font-size:13px;">'+
     '<b>'+prontas+' operação(ões) já têm dados suficientes</b> para virar meta. '+
     '<button class="acao mini" onclick="aplicarTodasSugestoes()">✓ Aplicar as metas sugeridas</button></div>';
@@ -2751,7 +2743,15 @@ function renderCalibra(){
     const btn = sug
       ? '<button class="acao mini" onclick="aplicarMetaSugerida(\''+op.id+'\')">✓ Usar esta meta</button>'
       : '<button class="acao mini sec" onclick="definirMeta(\''+op.id+'\')">Definir na mão</button>';
-    html+='<tr><td><b>'+op.nome+'</b></td>'+
+    // comparação descritiva com o conjunto das laterais (não é nota, é só pra enxergar a diferença)
+    let comp='';
+    if(ref && /^LATERAL/.test(op.id) && d.media){
+      const dif=Math.round((d.media/ref.media-1)*100);
+      comp='<div class="mini-info">'+(dif===0? 'na média das laterais'
+        : dif>0? dif+'% mais rápida que a média das laterais'
+               : Math.abs(dif)+'% mais lenta que a média das laterais')+'</div>';
+    }
+    html+='<tr><td><b>'+op.nome+'</b>'+comp+'</td>'+
       '<td class="mini-info">'+d.diasValidos+' dia(s) · '+d.horas.toFixed(1)+'h · '+d.pcs+' pçs</td>'+
       '<td><b>'+Math.round(d.media)+'</b> pçs/h</td>'+
       '<td>'+stat+'</td><td>'+btn+'</td></tr>';
@@ -3032,7 +3032,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.23.0';
+const VERSAO = '3.24.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
