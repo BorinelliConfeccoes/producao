@@ -545,6 +545,16 @@ nav button.oculto{display:none;}
     </div>
   </div>
 </div>
+<div class="bmodal" id="mapaModal">
+  <div class="caixa">
+    <div class="topo"><div class="tt">Operações da planilha</div><div class="st">BORINELLI · PRODUÇÃO</div></div>
+    <div class="corpo" id="mapaOpsCorpo"></div>
+    <div class="btns-grandes">
+      <button class="btn-g no" onclick="cancelarMapaOps()">✕ Cancelar</button>
+      <button class="btn-g ok" onclick="confirmarMapaOps()">✓ Importar</button>
+    </div>
+  </div>
+</div>
 <div class="bmodal" id="lacModal">
   <div class="caixa">
     <div class="topo"><div class="tt">Operação não registrada</div><div class="st">BORINELLI · PRODUÇÃO</div></div>
@@ -831,12 +841,12 @@ function registrarEntrada(num,tam,nPac,qtd){
 function pausarCam(){ try{ if(cam && camLendo && cam.pause) cam.pause(true); }catch(e){} }
 function retomarCam(){ try{ if(cam && camLendo && cam.resume) cam.resume(); }catch(e){} }
 function mostrarModal(id){
-  ['confModal','lacModal'].forEach(m=>{ const el=document.getElementById(m); if(el) el.classList.toggle('on', m===id); });
+  ['confModal','lacModal','mapaModal'].forEach(m=>{ const el=document.getElementById(m); if(el) el.classList.toggle('on', m===id); });
   travaBip=true; pausarCam();
 }
 function ocultarModais(){
-  const a=document.getElementById('confModal'), b=document.getElementById('lacModal');
-  if(a) a.classList.remove('on'); if(b) b.classList.remove('on');
+  const a=document.getElementById('confModal'), b=document.getElementById('lacModal'), m=document.getElementById('mapaModal');
+  if(a) a.classList.remove('on'); if(b) b.classList.remove('on'); if(m) m.classList.remove('on');
   travaBip=false; retomarCam();
 }
 function limparPend(){ pendingBase=null; pendingPacote=null; }
@@ -1630,20 +1640,44 @@ async function importarPlanilha(files){
     // mapeamento das operações da planilha -> operações do sistema
     S.mapaOps=S.mapaOps||{};
     const siglas=[...new Set(todos.map(l=>normOp(l.opTxt)))];
-    const faltam=siglas.filter(s=>!S.mapaOps[s]);
-    if(faltam.length){
-      for(const s of faltam){
-        // tenta adivinhar pelo nome
-        const alvo=S.opsBase.find(o=>normOp(o.nome)===s) || S.opsBase.find(o=>normOp(o.nome).replace(/ DE /g,' ')===s.replace(/ DE /g,' '));
-        const lista=S.opsBase.map((o,i)=>(i+1)+' = '+o.nome).join('\n');
-        const sug=alvo? (S.opsBase.indexOf(alvo)+1) : '';
-        const r=prompt('Na planilha aparece a operação:\n\n"'+s+'"\n\nQual operação do sistema é essa?\n'+lista+'\n\nDigite o número (ou deixe vazio pra ignorar):', String(sug));
-        if(r===null) return;
-        const idx=Number(r)-1;
-        if(idx>=0 && idx<S.opsBase.length) S.mapaOps[s]=S.opsBase[idx].id;
-        else S.mapaOps[s]='__ignorar__';
-      }
-    }
+    _impPendente={todos, siglas};
+    abrirMapaOps(siglas, todos);
+  }catch(e){ alert('Não consegui ler a planilha: '+e.message); }
+}
+let _impPendente=null;
+function abrirMapaOps(siglas, todos){
+  const resumo={};
+  todos.forEach(l=>{ const k=normOp(l.opTxt); if(!resumo[k]) resumo[k]={pecas:0,dias:0}; resumo[k].pecas+=l.pecas; resumo[k].dias++; });
+  const linhas=siglas.map(s=>{
+    const jaTem=S.mapaOps[s];
+    // sugere a operação mais parecida
+    const alvo=S.opsBase.find(o=>normOp(o.nome)===s)
+            || S.opsBase.find(o=>normOp(o.nome).replace(/ DE /g,' ')===s.replace(/ DE /g,' '))
+            || S.opsBase.find(o=>s.includes(normOp(o.nome)) || normOp(o.nome).includes(s));
+    const sel=jaTem || (alvo? alvo.id : '');
+    const opts=S.opsBase.map(o=>'<option value="'+o.id+'"'+(o.id===sel?' selected':'')+'>'+o.nome+'</option>').join('');
+    return '<tr><td><b>'+s+'</b><div class="mini-info">'+resumo[s].pecas+' pçs · '+resumo[s].dias+' lançamento(s)</div></td>'+
+      '<td><select id="mapa-'+s.replace(/ /g,'_')+'" style="width:100%;">'+
+      '<option value="__ignorar__"'+(sel?'':' selected')+'>— não importar —</option>'+opts+'</select></td></tr>';
+  }).join('');
+  document.getElementById('mapaOpsCorpo').innerHTML=
+    '<div class="mini-info" style="margin-bottom:8px;">Encontrei estas operações na planilha. Confira pra qual operação do sistema cada uma vai. O que estiver como "não importar" será ignorado.</div>'+
+    '<table style="width:100%;"><tr><th style="text-align:left;">Na planilha</th><th style="text-align:left;">No sistema</th></tr>'+linhas+'</table>';
+  mostrarModal('mapaModal');
+}
+function confirmarMapaOps(){
+  if(!_impPendente) return;
+  const {todos, siglas}=_impPendente;
+  siglas.forEach(s=>{
+    const el=document.getElementById('mapa-'+s.replace(/ /g,'_'));
+    if(el) S.mapaOps[s]=el.value;
+  });
+  ocultarModais();
+  gravarImportacao(todos);
+  _impPendente=null;
+}
+function cancelarMapaOps(){ _impPendente=null; ocultarModais(); }
+function gravarImportacao(todos){
     // cria os ciclos
     const loteId='L'+Date.now();
     let criados=0, pulados=0, ignorados=0;
@@ -1672,7 +1706,6 @@ async function importarPlanilha(files){
     alert('Planilhas importadas.\n\n'+criados+' lançamentos criados'+(pulados?'\n'+pulados+' já existiam (não dupliquei)':'')+(ignorados?'\n'+ignorados+' ignorados':'')+
       '\n\nPor pessoa:\n'+Object.entries(resumo).map(([k,v])=>'  '+k+': '+v+' pçs').join('\n')+
       '\n\nSe importou errado, use "Desfazer" na lista abaixo do botão.');
-  }catch(e){ alert('Não consegui ler a planilha: '+e.message); }
 }
 function desfazerImportacao(lote){
   const imp=(S.importacoes||[]).find(x=>x.lote===lote); if(!imp) return;
@@ -2525,7 +2558,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.15.0';
+const VERSAO = '3.16.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2622,7 +2655,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
