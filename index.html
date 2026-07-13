@@ -667,6 +667,14 @@ const BASELINES_PADRAO = {
 };
 const CFG_PADRAO = {ini:'05:00', fim:'14:30', fimSex:'13:30', cafeIni:'08:30', cafeFim:'09:00', cafeTol:5, troca:3, anom:55, filaBaixa:70};
 
+function migrarOpsBase(){
+  if(S.opsBaseRev >= 5) return;
+  const extras=(S.opsBase||[]).filter(o=>o&&o.extra);
+  // preserva as metas que o gestor já ajustou nas operações do sistema
+  const antigas={}; (S.opsBase||[]).forEach(o=>{ if(o&&!o.extra && o.metas && o.metas.some(m=>m>0)) antigas[o.id]=o.metas; });
+  S.opsBase = OPS_BASE.map(o=> antigas[o.id]? {...o, metas:antigas[o.id]} : {...o}).concat(extras);
+  S.opsBaseRev = 5;
+}
 let S = {cfg:{...CFG_PADRAO}, pessoas:PESSOAS_PADRAO, opsBase:OPS_BASE, metasVar:{}, baselines:BASELINES_PADRAO, marcas:[], ordens:[], ciclos:[]};
 let sel=null, pendingBase=null, pendingPacote=null, pendingTs=0, entradaMode=false;
 let travaBip=false, propostaAtual=null, lacPendente=null;
@@ -709,6 +717,7 @@ function ligarBanco(){
       if(zeraMarcas || zeraOrdens){ enviarParaNuvem(); return; }
       aplicandoRemoto=true;
       S=Object.assign(S,d);
+      migrarOpsBase();   // a nuvem pode trazer a lista de operações antiga: migra de novo
       aplicandoRemoto=false;
       gravarLocal(JSON.stringify(S));
       renderTudo(); preencherCfg();
@@ -754,13 +763,7 @@ async function carregar(){
   const v=await lerDados();
   if(v){ try{ const d=JSON.parse(v); S=Object.assign(S,d); }catch(e){} }
   // migrações
-  if(!S.opsBaseRev || S.opsBaseRev < 5){
-    const extras=(S.opsBase||[]).filter(o=>o&&o.extra);
-    // preserva metas que o gestor já tenha ajustado nas operações do sistema
-    const antigas={}; (S.opsBase||[]).forEach(o=>{ if(o&&!o.extra) antigas[o.id]=o.metas; });
-    S.opsBase = OPS_BASE.map(o=> antigas[o.id]? {...o, metas:antigas[o.id]} : {...o}).concat(extras);
-    S.opsBaseRev = 5;
-  }
+  migrarOpsBase();
   S.marcas=S.marcas||[]; S.metasVar=S.metasVar||{};
   (S.ordens||[]).forEach(o=>{ o.etapas=o.etapas||[]; o.externos=o.externos||[]; o.chegadas=o.chegadas||[]; o.resolvidos=o.resolvidos||[]; });
   if(S.cfg.empacadoMin===undefined) S.cfg.empacadoMin=45;
@@ -2705,7 +2708,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.20.0';
+const VERSAO = '3.20.1';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2802,7 +2805,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
