@@ -673,6 +673,9 @@ function migrarOpsBase(){
   // preserva as metas que o gestor já ajustou nas operações do sistema
   const antigas={}; (S.opsBase||[]).forEach(o=>{ if(o&&!o.extra && o.metas && o.metas.some(m=>m>0)) antigas[o.id]=o.metas; });
   S.opsBase = OPS_BASE.map(o=> antigas[o.id]? {...o, metas:antigas[o.id]} : {...o}).concat(extras);
+  // o mapeamento antigo foi feito com a lógica errada (casava "lateral com 2 etiqueta" com "Etiqueta"):
+  // joga fora pra ser refeito na tela de conferência
+  S.mapaOps = {};
   S.opsBaseRev = 5;
 }
 let S = {cfg:{...CFG_PADRAO}, pessoas:PESSOAS_PADRAO, opsBase:OPS_BASE, metasVar:{}, baselines:BASELINES_PADRAO, marcas:[], ordens:[], ciclos:[]};
@@ -1715,10 +1718,11 @@ function abrirMapaOps(siglas, todos){
   const resumo={};
   todos.forEach(l=>{ const k=normOp(l.opTxt); if(!resumo[k]) resumo[k]={pecas:0,dias:0,orig:l.opTxt}; resumo[k].pecas+=l.pecas; resumo[k].dias++; });
   const linhas=siglas.map(s=>{
-    const jaTem=S.mapaOps[s];
     const auto=opDaPlanilha(s);
     const existe=auto && S.opsBase.some(o=>o.id===auto);
-    const sel=jaTem || (existe? auto : '__criar__');
+    const jaTem=S.mapaOps[s] && S.opsBase.some(o=>o.id===S.mapaOps[s]) ? S.mapaOps[s] : null;
+    // a detecção pelo nome tem prioridade: um mapeamento salvo errado não pode mandar
+    const sel= existe? auto : (jaTem || '__criar__');
     const opts=S.opsBase.map(o=>'<option value="'+o.id+'"'+(o.id===sel?' selected':'')+'>'+o.nome+'</option>').join('');
     const id='mapa-'+s.replace(/[^A-Z0-9]/g,'_');
     return '<tr><td style="padding:6px 8px 6px 0;"><b>'+resumo[s].orig+'</b><div class="mini-info">'+resumo[s].pecas+' pçs · '+resumo[s].dias+' lançamento(s)</div></td>'+
@@ -1728,13 +1732,28 @@ function abrirMapaOps(siglas, todos){
       '<option value="__ignorar__"'+(sel==='__ignorar__'?' selected':'')+'>— não importar —</option>'+
       '</select></td></tr>';
   }).join('');
-  const novas=siglas.filter(s=>{ const jaTem=S.mapaOps[s]; const auto=opDaPlanilha(s); return !jaTem && !(auto && S.opsBase.some(o=>o.id===auto)); }).length;
+  const novas=siglas.filter(s=>{ const auto=opDaPlanilha(s); return !(auto && S.opsBase.some(o=>o.id===auto)); }).length;
   document.getElementById('mapaOpsCorpo').innerHTML=
     '<div class="mini-info" style="margin-bottom:8px;">Encontrei <b>'+siglas.length+'</b> operação(ões) na planilha.'+
     (novas? ' <b>'+novas+'</b> não existe(m) ainda e vão ser <b>criadas</b> com o nome da planilha (defina as metas em Ajustes → Operações).':'')+
     '<br>Confira cada uma. Lateral com 1, 2 ou 3 etiquetas são operações <b>diferentes</b>: o ritmo muda, e é isso que a gente quer medir.</div>'+
+    '<div id="mapaAviso"></div>'+
     '<table style="width:100%;"><tr><th style="text-align:left;">Na planilha</th><th style="text-align:left;">No sistema</th></tr>'+linhas+'</table>';
   mostrarModal('mapaModal');
+  checarMapaRepetido();
+  document.getElementById('mapaOpsCorpo').querySelectorAll('select').forEach(el=> el.onchange=checarMapaRepetido);
+}
+function checarMapaRepetido(){
+  const box=document.getElementById('mapaAviso'); if(!box) return;
+  const sels=[...document.getElementById('mapaOpsCorpo').querySelectorAll('select')];
+  const cont={};
+  sels.forEach(s=>{ const v=s.value; if(v==='__criar__'||v==='__ignorar__') return; cont[v]=(cont[v]||0)+1; });
+  const rep=Object.entries(cont).filter(([,n])=>n>1).map(([id])=>(S.opsBase.find(o=>o.id===id)||{}).nome||id);
+  box.innerHTML = rep.length
+    ? '<div style="background:#fdecea; border-left:4px solid #b23b3b; padding:8px; border-radius:4px; margin-bottom:8px; font-size:13px;">'+
+      '<b style="color:#b23b3b;">Atenção:</b> mais de uma operação da planilha está indo para <b>'+rep.join(', ')+'</b>. '+
+      'Se for no mesmo dia, elas vão ser <b>somadas</b> num lançamento só, e você perde a separação. Confira se é isso mesmo que você quer.</div>'
+    : '';
 }
 function confirmarMapaOps(){
   if(!_impPendente) return;
@@ -1763,20 +1782,27 @@ function confirmarMapaOps(){
 }
 function cancelarMapaOps(){ _impPendente=null; ocultarModais(); }
 function gravarImportacao(todos, criadas){
-    // cria os ciclos
     const loteId='L'+Date.now();
-    let criados=0, pulados=0, ignorados=0;
+    // 1) junta as linhas que caem na MESMA pessoa + dia + operação (soma peças e horas, não descarta)
+    const agr={};
+    let ignorados=0, somados=0;
     todos.forEach(l=>{
       const opId=S.mapaOps[normOp(l.opTxt)];
       if(!opId || opId==='__ignorar__'){ ignorados++; return; }
-      const dia=l.data; const chave='imp-'+l.pessoaId+'-'+dia.toISOString().slice(0,10)+'-'+opId;
-      if(S.ciclos.some(c=>c.id===chave)){ pulados++; return; }
-      const ini=new Date(dia); ini.setHours(7,0,0,0);
-      const durMs=l.horas*3600000;
-      const rotulo=(S.opsBase.find(o=>o.id===opId)||{}).nome||opId;
-      S.ciclos.push({id:chave, pessoa:l.pessoaId, op:opId, opKey:opId, rotulo, etapaIdx:-1,
-        ordem:'(planilha)', tam:'-', pacote:'-', qtd:l.pecas, ini:ini.getTime(), fim:ini.getTime()+durMs,
-        pausas:[], rateEfetivo:l.pecas/l.horas, importado:true, impLote:loteId});
+      const chave='imp-'+l.pessoaId+'-'+l.data.toISOString().slice(0,10)+'-'+opId;
+      if(agr[chave]){ agr[chave].pecas+=l.pecas; agr[chave].horas+=l.horas; somados++; }
+      else agr[chave]={chave, pessoaId:l.pessoaId, pessoa:l.pessoa, data:l.data, opId, pecas:l.pecas, horas:l.horas};
+    });
+    // 2) grava
+    let criados=0, pulados=0;
+    Object.values(agr).forEach(a=>{
+      const existente=S.ciclos.find(c=>c.id===a.chave);
+      if(existente){ pulados++; return; }
+      const ini=new Date(a.data); ini.setHours(7,0,0,0);
+      const rotulo=(S.opsBase.find(o=>o.id===a.opId)||{}).nome||a.opId;
+      S.ciclos.push({id:a.chave, pessoa:a.pessoaId, op:a.opId, opKey:a.opId, rotulo, etapaIdx:-1,
+        ordem:'(planilha)', tam:'-', pacote:'-', qtd:a.pecas, ini:ini.getTime(), fim:ini.getTime()+a.horas*3600000,
+        pausas:[], rateEfetivo:a.pecas/a.horas, importado:true, impLote:loteId});
       criados++;
     });
     if(criados){
@@ -1788,7 +1814,11 @@ function gravarImportacao(todos, criadas){
     salvarTudo(); renderTudo();
     const resumo={};
     todos.forEach(l=>{ const k=l.pessoa; resumo[k]=(resumo[k]||0)+l.pecas; });
-    alert('Planilhas importadas.\n\n'+criados+' lançamentos criados'+(pulados?'\n'+pulados+' já existiam (não dupliquei)':'')+(ignorados?'\n'+ignorados+' ignorados':'')+
+    const pcsGravadas=Object.values(agr).reduce((s,a)=>s+a.pecas,0);
+    alert('Planilhas importadas.\n\n'+criados+' lançamentos criados'+
+      (somados? '\n'+somados+' linhas foram SOMADAS (caíram no mesmo dia e na mesma operação)':'')+
+      (pulados? '\n'+pulados+' já existiam de uma importação anterior (não dupliquei)':'')+
+      (ignorados? '\n'+ignorados+' ignorados':'')+
       '\n\nPor pessoa:\n'+Object.entries(resumo).map(([k,v])=>'  '+k+': '+v+' pçs').join('\n')+
       ((criadas&&criadas.length)? '\n\nOperações NOVAS criadas:\n'+criadas.map(n=>'  • '+n).join('\n')+'\n\nDefina as metas delas em Ajustes → Operações.' : '')+
       '\n\nSe importou errado, use "Desfazer" na lista abaixo do botão.');
@@ -2708,7 +2738,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.20.1';
+const VERSAO = '3.21.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2805,7 +2835,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
