@@ -296,8 +296,15 @@ nav button.oculto{display:none;}
   </div>
   <div class="sub" id="sub-relat-envio">
     <div class="card">
-      <div class="mini-info" style="margin-bottom:8px;">Resumo individual de hoje com mensagem pronta. Copie e cole no WhatsApp de cada pessoa, ou copie todas de uma vez.</div>
-      <div class="linhaform"><button class="acao" onclick="renderEnvioDia()">Gerar resumos de hoje</button></div>
+      <div class="mini-info" style="margin-bottom:8px;">Resumo individual com mensagem pronta. Escolha o período (deixe vazio pra usar hoje). Copie e cole no WhatsApp de cada pessoa, ou copie todas de uma vez.</div>
+      <div class="linhaform">
+        <div><label>De</label><input type="date" id="envDe"></div>
+        <div><label>Até</label><input type="date" id="envAte"></div>
+        <button class="acao" onclick="renderEnvioDia()">Gerar resumos</button>
+        <button class="acao sec" onclick="envioHoje()">Hoje</button>
+        <button class="acao sec" onclick="envioSemana()">Últimos 7 dias</button>
+        <button class="acao sec" onclick="envioMes()">Este mês</button>
+      </div>
       <table id="tabEnvio"></table>
     </div>
   </div>
@@ -2204,13 +2211,42 @@ function desenharBarras(id, labels, valores){
     ctx.fillText(labels[i], x, H-14);
   });
 }
+function periodoEnvio(){
+  const de=document.getElementById('envDe'), ate=document.getElementById('envAte');
+  const vDe=de&&de.value? new Date(de.value+'T00:00:00') : null;
+  const vAte=ate&&ate.value? new Date(ate.value+'T23:59:59') : null;
+  if(!vDe && !vAte){ const h=new Date(); const ini=new Date(h); ini.setHours(0,0,0,0); const fim=new Date(h); fim.setHours(23,59,59,999); return {ini, fim, hoje:true}; }
+  const ini=vDe || new Date(0);
+  const fim=vAte || new Date(8640000000000000);
+  return {ini, fim, hoje:false};
+}
+function rotuloPeriodo(){
+  const p=periodoEnvio();
+  if(p.hoje) return 'hoje ('+new Date().toLocaleDateString('pt-BR')+')';
+  const f=d=>d.toLocaleDateString('pt-BR');
+  return f(p.ini)+' a '+f(p.fim);
+}
+function envioHoje(){ document.getElementById('envDe').value=''; document.getElementById('envAte').value=''; renderEnvioDia(); }
+function envioSemana(){
+  const hoje=new Date(); const de=new Date(hoje); de.setDate(de.getDate()-6);
+  document.getElementById('envDe').value=de.toISOString().slice(0,10);
+  document.getElementById('envAte').value=hoje.toISOString().slice(0,10);
+  renderEnvioDia();
+}
+function envioMes(){
+  const hoje=new Date(); const de=new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+  document.getElementById('envDe').value=de.toISOString().slice(0,10);
+  document.getElementById('envAte').value=hoje.toISOString().slice(0,10);
+  renderEnvioDia();
+}
 function resumoDiaPessoa(pid){
-  const hoje=new Date().toDateString();
-  const fech=S.ciclos.filter(c=>c.pessoa===pid && c.fim && new Date(c.ini).toDateString()===hoje);
+  const p=periodoEnvio();
+  const fech=S.ciclos.filter(c=>c.pessoa===pid && c.fim && c.ini>=p.ini.getTime() && c.ini<=p.fim.getTime());
   if(!fech.length) return null;
   const pcs=fech.reduce((s,c)=>s+qtdEfetiva(c),0);
   const ms=fech.reduce((s,c)=>s+tempoUtil(c),0);
   const media=pcs/(ms/3600000);
+  const dias=new Set(fech.map(c=>new Date(c.ini).toDateString())).size;
   const porOp={};
   fech.forEach(c=>{ if(!porOp[c.opKey]) porOp[c.opKey]={rotulo:c.rotulo,ms:0,pcs:0}; porOp[c.opKey].ms+=tempoUtil(c); porOp[c.opKey].pcs+=qtdEfetiva(c); });
   const principal=Object.entries(porOp).sort((a,b)=>b[1].ms-a[1].ms)[0];
@@ -2226,17 +2262,27 @@ function resumoDiaPessoa(pid){
     else if(mediaOp<m100) prox='Faltam '+Math.ceil(m100-mediaOp)+' pçs/h para os 100%.';
     else prox='Você está na faixa máxima. Excelente trabalho!';
   }
-  return {pcs, pacotes:fech.length, media, rotulo:g.rotulo, mediaOp, faixa:fx.tx, prox};
+  const todasOps=Object.values(porOp).sort((a,b)=>b.ms-a.ms).map(o=>({rotulo:o.rotulo, pcs:o.pcs, media:Math.round(o.pcs/(o.ms/3600000))}));
+  return {pcs, pacotes:fech.length, media, rotulo:g.rotulo, mediaOp, faixa:fx.tx, prox, dias, todasOps};
 }
 function msgDiaPessoa(p, r){
-  return 'Borinelli Confecções · Resumo de hoje ('+new Date().toLocaleDateString('pt-BR')+')\n\n'+
+  const per=periodoEnvio();
+  const cab= per.hoje? 'Resumo de hoje ('+new Date().toLocaleDateString('pt-BR')+')'
+                     : 'Resumo de '+rotuloPeriodo();
+  let ops='';
+  if(r.todasOps && r.todasOps.length>1){
+    ops='\nPor operação:\n'+r.todasOps.map(o=>'  • '+o.rotulo+': '+o.pcs+' pçs · '+o.media+' pçs/h').join('\n')+'\n';
+  }
+  return 'Borinelli Confecções · '+cab+'\n\n'+
     'Olá, '+p.nome+'!\n'+
-    'Peças: '+r.pcs+' em '+r.pacotes+' pacotes\n'+
+    'Peças: '+r.pcs+' em '+r.pacotes+' lançamentos'+(r.dias>1? ' · '+r.dias+' dias':'')+'\n'+
+    ops+
     'Operação principal: '+r.rotulo+'\n'+
     'Média: '+Math.round(r.mediaOp)+' pçs/h · Faixa '+r.faixa+'\n'+
-    r.prox+'\n\nBom descanso!';
+    r.prox+'\n\nObrigado pelo empenho!';
 }
 function renderEnvioDia(){
+  const per=rotuloPeriodo();
   let html='<tr><th>Pessoa</th><th>Peças</th><th>Média (op principal)</th><th>Faixa</th><th></th></tr>';
   let tem=false;
   S.pessoas.forEach(p=>{
@@ -2249,7 +2295,14 @@ function renderEnvioDia(){
     if(p.fone) btns.push('<a class="acao mini" style="text-decoration:none; display:inline-block; background:#25D366;" target="_blank" href="https://wa.me/55'+p.fone+'?text='+msg+'">WhatsApp</a>');
     html+='<tr><td><b>'+p.nome+'</b></td><td>'+r.pcs+'</td><td>'+Math.round(r.mediaOp)+' pçs/h · '+r.rotulo+'</td><td>'+r.faixa+'</td><td style="white-space:nowrap;">'+btns.join(' ')+'</td></tr>';
   });
-  tabEnvio.innerHTML = tem? html+'<tr><td colspan="5" style="padding-top:10px;"><button class="acao" onclick="copiarTodas()">📋 Copiar TODAS as mensagens</button></td></tr>' : '<tr><td class="mini-info">Ninguém fechou ciclo hoje ainda.</td></tr>';
+  const cab='<div class="mini-info" style="margin-bottom:6px;">Período: <b>'+per+'</b></div>';
+  document.getElementById('tabEnvio').innerHTML = tem
+    ? html+'<tr><td colspan="5" style="padding-top:10px;"><button class="acao" onclick="copiarTodas()">📋 Copiar TODAS as mensagens</button></td></tr>'
+    : '<tr><td class="mini-info">Nenhum registro no período ('+per+').</td></tr>';
+  const box=document.getElementById('tabEnvio');
+  if(box && box.previousElementSibling && box.previousElementSibling.id!=='envCab'){
+    const d=document.createElement('div'); d.id='envCab'; d.innerHTML=cab; box.parentNode.insertBefore(d, box);
+  } else if(document.getElementById('envCab')) document.getElementById('envCab').innerHTML=cab;
 }
 function copiarParaArea(txt){
   if(navigator.clipboard && navigator.clipboard.writeText){
@@ -2272,7 +2325,7 @@ function copiarTodas(){
     const r=resumoDiaPessoa(p.id);
     if(r) blocos.push('==== '+p.nome.toUpperCase()+' ====\n'+msgDiaPessoa(p,r));
   });
-  if(!blocos.length) return alert('Ninguém fechou ciclo hoje.');
+  if(!blocos.length) return alert('Nenhum registro no período.');
   copiarParaArea(blocos.join('\n\n'));
 }
 function renderComparativo(){
@@ -2560,7 +2613,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.16.1';
+const VERSAO = '3.17.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2657,7 +2710,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
