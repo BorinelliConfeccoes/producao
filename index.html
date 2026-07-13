@@ -573,19 +573,31 @@ nav button.oculto{display:none;}
 <script>
 /* ================= OPERAÇÕES BASE E VARIAÇÕES ================= */
 const OPS_BASE = [
+ // --- conforme as tabelas oficiais de produção (70/80/90/100%) ---
  {id:'OMBRO1', nome:'1 Ombro', metas:[190,210,230,250]},
- {id:'OMBROS2ETIQ', nome:'2 Ombros', metas:[90,100,120,130]},
- {id:'OMBROARREMATE', nome:'Arremate do ombro', metas:[170,190,210,230]},
+ {id:'OMBROS2ETIQ', nome:'Os 2 ombros com etiqueta', metas:[90,100,120,130]},
+ {id:'OMBROARREMATE', nome:'Ombro com arremate', metas:[170,190,210,230]},
  {id:'GOLAANEL', nome:'Gola em anel', metas:[85,95,100,110]},
  {id:'GOLAAPARELHO', nome:'Gola em aparelho overloque', metas:[170,190,210,220]},
- {id:'PESPONTO', nome:'Pesponto', metas:[160,170,180,200]},
- {id:'ETIQUETA', nome:'Etiqueta', metas:[0,0,0,0]},
+ {id:'PESPONTO', nome:'Pesponto reta/cobertura', metas:[160,170,180,200]},
  {id:'REFORCO', nome:'Reforço', metas:[150,180,200,210]},
- {id:'MANGA', nome:'Manga', metas:[75,80,90,100]},
- {id:'LATERAL', nome:'Lateral', metas:[75,80,90,100]},
+ {id:'REFORCOSEMCORTAR', nome:'Reforço sem cortar', metas:[0,0,0,210]},
+ {id:'MANGA', nome:'Manga (pregar)', metas:[75,80,90,100]},
  {id:'BAINHAMANGA', nome:'Bainha manga', metas:[90,110,120,140]},
  {id:'BAINHABARRA', nome:'Bainha barra', metas:[120,140,160,180]},
- {id:'REVISAO', nome:'Revisão', metas:[80,90,95,100]}
+ {id:'REVISAO', nome:'Revisão', metas:[80,90,95,100]},
+ // --- LATERAL: variações. A tabela oficial só tem a lateral simples.
+ // As demais estão com meta zerada de propósito, pra calibrar pela média real. ---
+ {id:'LATERAL', nome:'Lateral (sem etiqueta)', metas:[75,80,90,100]},
+ {id:'LATERAL1ETIQ', nome:'Lateral com 1 etiqueta', metas:[0,0,0,0]},
+ {id:'LATERAL2ETIQ', nome:'Lateral com 2 etiquetas', metas:[0,0,0,0]},
+ {id:'LATERAL3ETIQ', nome:'Lateral com 3 etiquetas', metas:[0,0,0,0]},
+ {id:'LATERALARREMATE', nome:'Lateral com arremate (sem etiqueta)', metas:[0,0,0,0]},
+ {id:'LATERALARREMATE1ETIQ', nome:'Lateral com arremate e 1 etiqueta', metas:[0,0,0,0]},
+ {id:'LATERALARREMATE2ETIQ', nome:'Lateral com arremate e 2 etiquetas', metas:[0,0,0,0]},
+ {id:'LATERALARREMATE3ETIQ', nome:'Lateral com arremate e 3 etiquetas', metas:[0,0,0,0]},
+ // --- etiqueta avulsa (quando é operação separada) ---
+ {id:'ETIQUETA', nome:'Etiqueta', metas:[0,0,0,0]}
 ];
 // variações por operação base
 const VARS = {
@@ -741,7 +753,13 @@ async function carregar(){
   const v=await lerDados();
   if(v){ try{ const d=JSON.parse(v); S=Object.assign(S,d); }catch(e){} }
   // migrações
-  if(!S.opsBaseRev || S.opsBaseRev < 4){ const extras=(S.opsBase||[]).filter(o=>o&&o.extra); S.opsBase = OPS_BASE.concat(extras); S.opsBaseRev = 4; }
+  if(!S.opsBaseRev || S.opsBaseRev < 5){
+    const extras=(S.opsBase||[]).filter(o=>o&&o.extra);
+    // preserva metas que o gestor já tenha ajustado nas operações do sistema
+    const antigas={}; (S.opsBase||[]).forEach(o=>{ if(o&&!o.extra) antigas[o.id]=o.metas; });
+    S.opsBase = OPS_BASE.map(o=> antigas[o.id]? {...o, metas:antigas[o.id]} : {...o}).concat(extras);
+    S.opsBaseRev = 5;
+  }
   S.marcas=S.marcas||[]; S.metasVar=S.metasVar||{};
   (S.ordens||[]).forEach(o=>{ o.etapas=o.etapas||[]; o.externos=o.externos||[]; o.chegadas=o.chegadas||[]; o.resolvidos=o.resolvidos||[]; });
   if(S.cfg.empacadoMin===undefined) S.cfg.empacadoMin=45;
@@ -1654,39 +1672,93 @@ async function importarPlanilha(files){
   }catch(e){ alert('Não consegui ler a planilha: '+e.message); }
 }
 let _impPendente=null;
+function opDaPlanilha(sigla){
+  // reconhece as variações de lateral escritas de qualquer jeito na planilha
+  const s=' '+sigla+' ';
+  if(/LATERAL/.test(s)){
+    const arremate=/ARREMATE/.test(s);
+    let n=0;
+    const m=s.match(/(\d)\s*ETIQ/); if(m) n=Number(m[1]);
+    else if(/SEM\s+ETIQ/.test(s)) n=0;
+    else if(/C\/?\s*ETIQ|COM\s+ETIQ/.test(s)) n=1;
+    if(arremate) return n===0? 'LATERALARREMATE' : 'LATERALARREMATE'+n+'ETIQ';
+    return n===0? 'LATERAL' : 'LATERAL'+n+'ETIQ';
+  }
+  // nome igual ao da operação cadastrada
+  const exato=S.opsBase.find(o=>normOp(o.nome)===sigla);
+  if(exato) return exato.id;
+  const semDe=S.opsBase.find(o=>normOp(o.nome).replace(/ DE /g,' ')===sigla.replace(/ DE /g,' '));
+  if(semDe) return semDe.id;
+  // apelidos comuns (ordem das palavras pode variar)
+  if(/ARREMATE/.test(s) && /OMBRO/.test(s)) return 'OMBROARREMATE';
+  if(/^ARREMATE$/.test(sigla)) return 'OMBROARREMATE';
+  if(/2\s*OMBROS?/.test(s) && /ETIQ/.test(s)) return 'OMBROS2ETIQ';
+  if(/^1\s*OMBRO$/.test(sigla)) return 'OMBRO1';
+  if(/^PREGAR MANGA$|^MANGA$/.test(sigla)) return 'MANGA';
+  if(/^BARRA$|BAINHA.*BARRA/.test(sigla)) return 'BAINHABARRA';
+  if(/BAINHA.*MANGA/.test(sigla)) return 'BAINHAMANGA';
+  if(/GOLA/.test(s) && /ANEL/.test(s)) return 'GOLAANEL';
+  if(/GOLA/.test(s) && /(APARELHO|OVERLOQUE)/.test(s)) return 'GOLAAPARELHO';
+  if(/^GOLA$/.test(sigla)) return 'GOLAANEL';
+  if(/PESPONTO/.test(s)) return 'PESPONTO';
+  if(/REFORCO/.test(s) && /SEM CORTAR/.test(s)) return 'REFORCOSEMCORTAR';
+  if(/^REFORCO$/.test(sigla)) return 'REFORCO';
+  if(/^REVISAO$/.test(sigla)) return 'REVISAO';
+  if(/^ETIQUETA$/.test(sigla)) return 'ETIQUETA';
+  return null;
+}
 function abrirMapaOps(siglas, todos){
   const resumo={};
-  todos.forEach(l=>{ const k=normOp(l.opTxt); if(!resumo[k]) resumo[k]={pecas:0,dias:0}; resumo[k].pecas+=l.pecas; resumo[k].dias++; });
+  todos.forEach(l=>{ const k=normOp(l.opTxt); if(!resumo[k]) resumo[k]={pecas:0,dias:0,orig:l.opTxt}; resumo[k].pecas+=l.pecas; resumo[k].dias++; });
   const linhas=siglas.map(s=>{
     const jaTem=S.mapaOps[s];
-    // sugere a operação mais parecida
-    const alvo=S.opsBase.find(o=>normOp(o.nome)===s)
-            || S.opsBase.find(o=>normOp(o.nome).replace(/ DE /g,' ')===s.replace(/ DE /g,' '))
-            || S.opsBase.find(o=>s.includes(normOp(o.nome)) || normOp(o.nome).includes(s));
-    const sel=jaTem || (alvo? alvo.id : '');
+    const auto=opDaPlanilha(s);
+    const existe=auto && S.opsBase.some(o=>o.id===auto);
+    const sel=jaTem || (existe? auto : '__criar__');
     const opts=S.opsBase.map(o=>'<option value="'+o.id+'"'+(o.id===sel?' selected':'')+'>'+o.nome+'</option>').join('');
-    return '<tr><td><b>'+s+'</b><div class="mini-info">'+resumo[s].pecas+' pçs · '+resumo[s].dias+' lançamento(s)</div></td>'+
-      '<td><select id="mapa-'+s.replace(/ /g,'_')+'" style="width:100%;">'+
-      '<option value="__ignorar__"'+(sel?'':' selected')+'>— não importar —</option>'+opts+'</select></td></tr>';
+    const id='mapa-'+s.replace(/[^A-Z0-9]/g,'_');
+    return '<tr><td style="padding:6px 8px 6px 0;"><b>'+resumo[s].orig+'</b><div class="mini-info">'+resumo[s].pecas+' pçs · '+resumo[s].dias+' lançamento(s)</div></td>'+
+      '<td style="padding:6px 0;"><select id="'+id+'" data-sigla="'+s+'" style="width:100%;">'+
+      '<option value="__criar__"'+(sel==='__criar__'?' selected':'')+'>➕ Criar operação nova com este nome</option>'+
+      opts+
+      '<option value="__ignorar__"'+(sel==='__ignorar__'?' selected':'')+'>— não importar —</option>'+
+      '</select></td></tr>';
   }).join('');
+  const novas=siglas.filter(s=>{ const jaTem=S.mapaOps[s]; const auto=opDaPlanilha(s); return !jaTem && !(auto && S.opsBase.some(o=>o.id===auto)); }).length;
   document.getElementById('mapaOpsCorpo').innerHTML=
-    '<div class="mini-info" style="margin-bottom:8px;">Encontrei estas operações na planilha. Confira pra qual operação do sistema cada uma vai. O que estiver como "não importar" será ignorado.</div>'+
+    '<div class="mini-info" style="margin-bottom:8px;">Encontrei <b>'+siglas.length+'</b> operação(ões) na planilha.'+
+    (novas? ' <b>'+novas+'</b> não existe(m) ainda e vão ser <b>criadas</b> com o nome da planilha (defina as metas em Ajustes → Operações).':'')+
+    '<br>Confira cada uma. Lateral com 1, 2 ou 3 etiquetas são operações <b>diferentes</b>: o ritmo muda, e é isso que a gente quer medir.</div>'+
     '<table style="width:100%;"><tr><th style="text-align:left;">Na planilha</th><th style="text-align:left;">No sistema</th></tr>'+linhas+'</table>';
   mostrarModal('mapaModal');
 }
 function confirmarMapaOps(){
   if(!_impPendente) return;
   const {todos, siglas}=_impPendente;
+  const nomeOriginal={};
+  todos.forEach(l=>{ const k=normOp(l.opTxt); if(!nomeOriginal[k]) nomeOriginal[k]=l.opTxt; });
+  const criadas=[];
   siglas.forEach(s=>{
-    const el=document.getElementById('mapa-'+s.replace(/ /g,'_'));
-    if(el) S.mapaOps[s]=el.value;
+    const el=document.getElementById('mapa-'+s.replace(/[^A-Z0-9]/g,'_'));
+    if(!el) return;
+    if(el.value==='__criar__'){
+      // cria a operação com o nome que veio da planilha
+      const nome=nomeOriginal[s]||s;
+      const idDe=t=>t.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,'');
+      let id=idDe(nome)||'OP';
+      if(S.opsBase.some(o=>o.id===id)){ let k=2; while(S.opsBase.some(o=>o.id===id+k)) k++; id=id+k; }
+      S.opsBase.push({id, nome, metas:[0,0,0,0], extra:true});
+      S.mapaOps[s]=id; criadas.push(nome);
+    } else {
+      S.mapaOps[s]=el.value;
+    }
   });
   ocultarModais();
-  gravarImportacao(todos);
+  gravarImportacao(todos, criadas);
   _impPendente=null;
 }
 function cancelarMapaOps(){ _impPendente=null; ocultarModais(); }
-function gravarImportacao(todos){
+function gravarImportacao(todos, criadas){
     // cria os ciclos
     const loteId='L'+Date.now();
     let criados=0, pulados=0, ignorados=0;
@@ -1714,6 +1786,7 @@ function gravarImportacao(todos){
     todos.forEach(l=>{ const k=l.pessoa; resumo[k]=(resumo[k]||0)+l.pecas; });
     alert('Planilhas importadas.\n\n'+criados+' lançamentos criados'+(pulados?'\n'+pulados+' já existiam (não dupliquei)':'')+(ignorados?'\n'+ignorados+' ignorados':'')+
       '\n\nPor pessoa:\n'+Object.entries(resumo).map(([k,v])=>'  '+k+': '+v+' pçs').join('\n')+
+      ((criadas&&criadas.length)? '\n\nOperações NOVAS criadas:\n'+criadas.map(n=>'  • '+n).join('\n')+'\n\nDefina as metas delas em Ajustes → Operações.' : '')+
       '\n\nSe importou errado, use "Desfazer" na lista abaixo do botão.');
 }
 function desfazerImportacao(lote){
@@ -2613,7 +2686,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.17.0';
+const VERSAO = '3.19.1';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2710,7 +2783,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
