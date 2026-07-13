@@ -753,6 +753,8 @@ function horaDoDia(ts, hhmm){ const d=new Date(ts); const [h,m]=hhmm.split(':').
 function fimJornada(ts){ const dia=new Date(ts).getDay(); return horaDoDia(ts, dia===5? S.cfg.fimSex : S.cfg.fim); }
 function overlap(a1,a2,b1,b2){ return Math.max(0, Math.min(a2,b2)-Math.max(a1,b1)); }
 function tempoUtil(c){
+  // ciclo importado de planilha: as horas já vêm líquidas, não desconta nada
+  if(c.importado) return Math.max((c.fim||Date.now())-c.ini, 60000);
   let fim=c.fim||Date.now(); let ms=fim-c.ini;
   (c.pausas||[]).forEach(p=> ms -= ((p.fim||Date.now())-p.ini));
   const cIni=horaDoDia(c.ini,S.cfg.cafeIni), cFim=horaDoDia(c.ini,S.cfg.cafeFim)+(S.cfg.cafeTol*60000);
@@ -2558,7 +2560,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.16.0';
+const VERSAO = '3.16.1';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
