@@ -510,8 +510,9 @@ nav button.oculto{display:none;}
     <div class="linhaform">
       <button class="acao" onclick="importarPlanilhaClick()">📊 Importar planilhas</button>
       <input type="file" id="arqPlanilha" accept=".xlsx,.xls" multiple style="display:none;" onchange="importarPlanilha(this.files)">
-      <button class="acao sec" onclick="if(autorizado() && confirm('Apagar só os lançamentos IMPORTADOS de planilha? Os bipados ficam.')){S.ciclos=S.ciclos.filter(c=>!c.importado); salvarTudo(); renderTudo(); alert('Lançamentos importados removidos.');}">Remover importados</button>
+      <button class="acao alerta" onclick="limparImportados()">🗑 Apagar TUDO que veio de planilha</button>
     </div>
+    <div class="mini-info" style="margin-top:6px;">Importou errado ou mudou de ideia? Apague tudo que veio de planilha e importe de novo. Os registros <b>bipados</b> não são afetados.</div>
     <div id="mapaOpsBox"></div>
   </div>
   <div class="card">
@@ -795,7 +796,7 @@ function metasDe(opKey){
 }
 function faixaDe(opKey, rate){
   const [m70,m80,m90,m100]=metasDe(opKey);
-  if(!m70) return {tx:'sem meta', cls:''};
+  if(!m70) return {tx:'meta a definir', cls:''};
   if(rate>=m100) return {tx:'100%', cls:'fx-100'};
   if(rate>=m90) return {tx:'90%', cls:'fx-90'};
   if(rate>=m80) return {tx:'80%', cls:'fx-80'};
@@ -1797,6 +1798,17 @@ function desfazerImportacao(lote){
   salvarTudo(); renderTudo();
   alert('Importação desfeita.');
 }
+function limparImportados(){
+  if(!autorizado()) return;
+  const n=S.ciclos.filter(c=>c.importado).length;
+  if(!n) return alert('Não há nada importado de planilha.');
+  if(!confirm('Apagar os '+n+' lançamentos que vieram de planilha?\n\nOs registros bipados NÃO são afetados.\n\nO mapeamento das operações também será esquecido, pra você refazer na tela de conferência.')) return;
+  S.ciclos=S.ciclos.filter(c=>!c.importado);
+  S.importacoes=[];
+  S.mapaOps={};   // esquece o mapa antigo (que pode estar errado)
+  salvarTudo(); renderTudo();
+  alert(n+' lançamentos removidos.\n\nAgora importe as planilhas de novo. Na tela de conferência, veja se cada operação está indo pro lugar certo.');
+}
 function renderImportacoes(){
   const box=document.getElementById('mapaOpsBox'); if(!box) return;
   const lst=(S.importacoes||[]).slice().reverse();
@@ -2335,7 +2347,11 @@ function resumoDiaPessoa(pid){
     else if(mediaOp<m100) prox='Faltam '+Math.ceil(m100-mediaOp)+' pçs/h para os 100%.';
     else prox='Você está na faixa máxima. Excelente trabalho!';
   }
-  const todasOps=Object.values(porOp).sort((a,b)=>b.ms-a.ms).map(o=>({rotulo:o.rotulo, pcs:o.pcs, media:Math.round(o.pcs/(o.ms/3600000))}));
+  const todasOps=Object.entries(porOp).sort((a,b)=>b[1].ms-a[1].ms).map(([k,o])=>{
+    const md=o.pcs/(o.ms/3600000);
+    const f=faixaDe(k, md);
+    return {rotulo:o.rotulo, pcs:o.pcs, media:Math.round(md), faixa:f.tx, faixaCls:f.cls};
+  });
   return {pcs, pacotes:fech.length, media, rotulo:g.rotulo, mediaOp, faixa:fx.tx, prox, dias, todasOps};
 }
 function msgDiaPessoa(p, r){
@@ -2344,7 +2360,7 @@ function msgDiaPessoa(p, r){
                      : 'Resumo de '+rotuloPeriodo();
   let ops='';
   if(r.todasOps && r.todasOps.length>1){
-    ops='\nPor operação:\n'+r.todasOps.map(o=>'  • '+o.rotulo+': '+o.pcs+' pçs · '+o.media+' pçs/h').join('\n')+'\n';
+    ops='\nPor operação:\n'+r.todasOps.map(o=>'  • '+o.rotulo+': '+o.pcs+' pçs · '+o.media+' pçs/h'+(o.faixa&&o.faixa!=='meta a definir'? ' ('+o.faixa+')':'')).join('\n')+'\n';
   }
   return 'Borinelli Confecções · '+cab+'\n\n'+
     'Olá, '+p.nome+'!\n'+
@@ -2356,7 +2372,7 @@ function msgDiaPessoa(p, r){
 }
 function renderEnvioDia(){
   const per=rotuloPeriodo();
-  let html='<tr><th>Pessoa</th><th>Peças</th><th>Média (op principal)</th><th>Faixa</th><th></th></tr>';
+  let html='<tr><th>Pessoa</th><th>Peças</th><th>Operações no período</th><th></th></tr>';
   let tem=false;
   S.pessoas.forEach(p=>{
     const r=resumoDiaPessoa(p.id);
@@ -2366,16 +2382,19 @@ function renderEnvioDia(){
     const btns=[];
     btns.push('<button class="acao mini sec" onclick="copiarMsg(\''+p.id+'\')">📋 Copiar</button>');
     if(p.fone) btns.push('<a class="acao mini" style="text-decoration:none; display:inline-block; background:#25D366;" target="_blank" href="https://wa.me/55'+p.fone+'?text='+msg+'">WhatsApp</a>');
-    html+='<tr><td><b>'+p.nome+'</b></td><td>'+r.pcs+'</td><td>'+Math.round(r.mediaOp)+' pçs/h · '+r.rotulo+'</td><td>'+r.faixa+'</td><td style="white-space:nowrap;">'+btns.join(' ')+'</td></tr>';
+    const listaOps=(r.todasOps||[]).map(o=>{
+      const fx=o.faixa? '<span class="faixa '+o.faixaCls+'">'+o.faixa+'</span>' : '';
+      return '<div style="padding:2px 0;">'+o.rotulo+': <b>'+o.pcs+'</b> pçs · <b>'+o.media+'</b> pçs/h '+fx+'</div>';
+    }).join('');
+    html+='<tr><td><b>'+p.nome+'</b></td><td><b>'+r.pcs+'</b></td><td>'+listaOps+'</td><td style="white-space:nowrap; vertical-align:top;">'+btns.join(' ')+'</td></tr>';
   });
-  const cab='<div class="mini-info" style="margin-bottom:6px;">Período: <b>'+per+'</b></div>';
   document.getElementById('tabEnvio').innerHTML = tem
-    ? html+'<tr><td colspan="5" style="padding-top:10px;"><button class="acao" onclick="copiarTodas()">📋 Copiar TODAS as mensagens</button></td></tr>'
+    ? html+'<tr><td colspan="4" style="padding-top:10px;"><button class="acao" onclick="copiarTodas()">📋 Copiar TODAS as mensagens</button></td></tr>'
     : '<tr><td class="mini-info">Nenhum registro no período ('+per+').</td></tr>';
+  const cab='<div class="mini-info" style="margin-bottom:6px;">Período: <b>'+per+'</b></div>';
   const box=document.getElementById('tabEnvio');
-  if(box && box.previousElementSibling && box.previousElementSibling.id!=='envCab'){
-    const d=document.createElement('div'); d.id='envCab'; d.innerHTML=cab; box.parentNode.insertBefore(d, box);
-  } else if(document.getElementById('envCab')) document.getElementById('envCab').innerHTML=cab;
+  if(document.getElementById('envCab')) document.getElementById('envCab').innerHTML=cab;
+  else if(box){ const d=document.createElement('div'); d.id='envCab'; d.innerHTML=cab; box.parentNode.insertBefore(d, box); }
 }
 function copiarParaArea(txt){
   if(navigator.clipboard && navigator.clipboard.writeText){
@@ -2686,7 +2705,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.19.1';
+const VERSAO = '3.20.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2783,7 +2802,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
