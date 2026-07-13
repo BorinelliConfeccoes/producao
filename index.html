@@ -193,6 +193,7 @@ nav button.oculto{display:none;}
     <div id="relogio">--:--:--</div>
   </div>
   <nav>
+    <button data-t="minha" class="oculto">📈 Minha produção</button>
     <button data-t="bip" class="on">📷 Bipagem</button>
     <button data-t="painel">📺 Ao Vivo</button>
     <button data-t="relat">📊 Relatórios</button>
@@ -213,6 +214,17 @@ nav button.oculto{display:none;}
 <main>
 
 <!-- ============ BIPAGEM ============ -->
+<section class="tela" id="t-minha">
+  <div class="linhaform">
+    <div><label>Período</label><select id="miDias" onchange="renderMinha()">
+      <option value="7">Últimos 7 dias</option>
+      <option value="30" selected>Últimos 30 dias</option>
+      <option value="60">Últimos 60 dias</option>
+      <option value="9999">Tudo</option>
+    </select></div>
+  </div>
+  <div id="minhaOut"></div>
+</section>
 <section class="tela on" id="t-bip">
   <input id="bipInput" autocomplete="off">
   <div class="card" id="pessoaPickerCard" style="margin-bottom:14px;"><div id="pessoaPicker"></div></div>
@@ -316,7 +328,7 @@ nav button.oculto{display:none;}
     <div id="cmpOut"></div>
   </div>
   <div class="sub" id="sub-relat-calibra">
-    <div class="card"><div class="mini-info" style="margin-bottom:8px;">Média real de todas as pessoas em cada variação, para você definir metas do que ainda não tem tabela.</div><table id="tabCalibra"></table></div>
+    <div class="card"><div class="mini-info" style="margin-bottom:8px;">Média real de todas as pessoas em cada variação. Quando houver dados suficientes (mínimo 5 dias e 20 horas), o sistema sugere a meta 70/80/90/100 sozinho.</div><div id="calibraTopo"></div><table id="tabCalibra"></table></div>
   </div>
   <div class="sub" id="sub-relat-ocorr">
     <div class="linhaform"><div><label>Período</label><select id="ocDias"><option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="60">60 dias</option><option value="9999">Tudo</option></select></div><button class="acao" onclick="renderOcorrencias()">Atualizar</button></div>
@@ -435,6 +447,23 @@ nav button.oculto{display:none;}
     </div>
     <div class="mini-info" style="margin-top:8px;">Marcas e Ajustes ficam sempre só com você. Mesmo com uma tela liberada, a operadora só vê, não consegue criar, editar nem excluir.</div>
     <button class="acao" onclick="salvarAcesso()" style="margin-top:12px;">Salvar acesso e permissões</button>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0;">Acesso do dono (Edvilson)</h2>
+    <div class="mini-info" style="margin-bottom:8px;">Vê o Ao Vivo e os Relatórios de <b>todas</b> as pessoas. Não bipa e não mexe em nada.</div>
+    <div class="linhaform">
+      <div><label>Usuário</label><input id="acDonoUser" style="width:150px;"></div>
+      <div><label>Senha</label><input id="acDonoPass" type="text" style="width:130px;"></div>
+      <button class="acao" onclick="salvarAcessoDono()">Salvar</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0;">Acesso das costureiras</h2>
+    <div class="mini-info" style="margin-bottom:8px;">Cada uma entra com o seu login e vê <b>só a própria</b> produção: peças, horas, média por operação, faixa e o ritmo dia a dia. Quem você cadastrar em Pessoas já ganha um acesso automático.</div>
+    <table id="tabAcessoPessoas"></table>
+    <div class="linhaform" style="margin-top:10px;">
+      <button class="acao sec" onclick="imprimirAcessos()">🖨 Imprimir os acessos pra entregar</button>
+    </div>
   </div>
   </div>
   <div class="sub on" id="sub-aj-regras">
@@ -800,9 +829,36 @@ function metasDe(opKey){
   const base=opKey.split('|')[0];
   return (S.opsBase.find(o=>o.id===base)||{}).metas||[0,0,0,0];
 }
+/* ---- Referência ponderada por grupo (enquanto a meta não existe) ---- */
+const GRUPOS_REF = [
+  {teste:id=>/^LATERAL/.test(id), nome:'laterais'}
+];
+function grupoDe(opId){ const g=GRUPOS_REF.find(x=>x.teste(opId)); return g? g.nome : null; }
+function refPonderada(opId){
+  const g=GRUPOS_REF.find(x=>x.teste(opId)); if(!g) return null;
+  let pcs=0, ms=0;
+  S.ciclos.forEach(c=>{
+    if(!c.fim || c.flag || c.lote) return;
+    const base=(c.opKey||c.op||'').split('|')[0];
+    if(!g.teste(base)) return;
+    pcs+=qtdEfetiva(c); ms+=tempoUtil(c);
+  });
+  if(!ms || !pcs) return null;
+  return {media: pcs/(ms/3600000), pcs, horas: ms/3600000, grupo:g.nome};
+}
 function faixaDe(opKey, rate){
   const [m70,m80,m90,m100]=metasDe(opKey);
-  if(!m70) return {tx:'meta a definir', cls:''};
+  if(!m70){
+    // sem meta ainda: compara com a média ponderada do grupo (ex: todas as laterais)
+    const base=opKey.split('|')[0];
+    const ref=refPonderada(base);
+    if(ref && ref.media>0){
+      const p=Math.round(rate/ref.media*100);
+      const cls = p>=110? 'fx-100' : p>=100? 'fx-90' : p>=90? 'fx-80' : p>=80? 'fx-70' : 'fx-abx';
+      return {tx:p+'% da referência', cls, ref:Math.round(ref.media)};
+    }
+    return {tx:'meta a definir', cls:''};
+  }
   if(rate>=m100) return {tx:'100%', cls:'fx-100'};
   if(rate>=m90) return {tx:'90%', cls:'fx-90'};
   if(rate>=m80) return {tx:'80%', cls:'fx-80'};
@@ -1361,6 +1417,7 @@ function flash(ok,g,p){
 /* ================= ACESSO E PERFIS ================= */
 function limparTexto(s){ return String(s||'').replace(/[<>"`]/g,'').trim(); }
 let perfilAtivo=null;
+let pessoaLogada=null;
 function acessoCfg(){
   if(!S.cfg.acesso) S.cfg.acesso={};
   const a=S.cfg.acesso;
@@ -1368,33 +1425,55 @@ function acessoCfg(){
   if(!a.adminPass) a.adminPass='2310';
   if(!a.opUser) a.opUser='costura';
   if(!a.opPass) a.opPass='1234';
+  if(!a.donoUser) a.donoUser='edvilson';
+  if(!a.donoPass) a.donoPass='2610';
   if(!a.perms) a.perms={relat:false, ops:false, hist:false, alertas:false, entrada:false};
+  // cada pessoa tem o seu acesso pra ver a própria produção
+  (S.pessoas||[]).forEach(p=>{ if(!p.user || !p.pass) gerarAcessoPessoa(p); });
   return a;
+}
+function senhaAleatoria(){ return String(Math.floor(1000+Math.random()*9000)); }
+function usuarioLivre(base){
+  let u=base, k=2;
+  while(S.pessoas.some(p=>p.user===u) || [S.cfg.acesso.adminUser,S.cfg.acesso.opUser,S.cfg.acesso.donoUser].includes(u)){ u=base+k; k++; }
+  return u;
+}
+function gerarAcessoPessoa(p){
+  const base=String(p.nome||'').trim().split(/\s+/)[0].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,'') || 'pessoa';
+  p.user=usuarioLivre(base);
+  p.pass=senhaAleatoria();
 }
 function fazerLogin(){
   const a=acessoCfg();
   const u=(loginUser.value||'').trim().toLowerCase();
   const p=(loginPass.value||'').trim();
-  let papel=null;
+  let papel=null, pid=null;
   if(u===String(a.adminUser).toLowerCase() && p===String(a.adminPass)) papel='admin';
+  else if(u===String(a.donoUser).toLowerCase() && p===String(a.donoPass)) papel='dono';
   else if(u===String(a.opUser).toLowerCase() && p===String(a.opPass)) papel='operador';
+  else {
+    const pe=S.pessoas.find(x=>String(x.user||'').toLowerCase()===u && String(x.pass||'')===p);
+    if(pe){ papel='costureira'; pid=pe.id; }
+  }
   if(!papel){ loginErro.textContent='Usuário ou senha incorretos.'; return; }
   loginErro.textContent=''; loginPass.value='';
-  perfilAtivo=papel;
-  try{ localStorage.setItem('perfilBorinelli', papel); }catch(e){}
+  perfilAtivo=papel; pessoaLogada=pid;
+  try{ localStorage.setItem('perfilBorinelli', papel); localStorage.setItem('pessoaBorinelli', pid||''); }catch(e){}
   document.getElementById('loginOverlay').style.display='none';
   aplicarPerfil();
 }
 function sair(){
-  perfilAtivo=null;
-  try{ localStorage.removeItem('perfilBorinelli'); }catch(e){}
+  perfilAtivo=null; pessoaLogada=null;
+  try{ localStorage.removeItem('perfilBorinelli'); localStorage.removeItem('pessoaBorinelli'); }catch(e){}
   loginUser.value=''; loginPass.value=''; loginErro.textContent='';
   document.getElementById('loginOverlay').style.display='flex';
 }
 function restaurarPerfil(){
-  let p=null; try{ p=localStorage.getItem('perfilBorinelli'); }catch(e){}
-  if(p==='admin' || p==='operador'){
-    perfilAtivo=p;
+  let p=null, pid=null;
+  try{ p=localStorage.getItem('perfilBorinelli'); pid=localStorage.getItem('pessoaBorinelli'); }catch(e){}
+  if(p==='costureira' && !(pid && S.pessoas.some(x=>x.id===pid))) p=null;   // pessoa saiu do cadastro
+  if(p==='admin' || p==='operador' || p==='dono' || p==='costureira'){
+    perfilAtivo=p; pessoaLogada=(p==='costureira')? pid : null;
     document.getElementById('loginOverlay').style.display='none';
     aplicarPerfil();
   } else {
@@ -1403,30 +1482,151 @@ function restaurarPerfil(){
 }
 function podeEditar(){ return perfilAtivo==='admin'; }
 function temPermissao(area){ return perfilAtivo==='admin' || (acessoCfg().perms[area]===true); }
+/* ---- Tela da costureira: só a própria produção ---- */
+function renderMinha(){
+  const box=document.getElementById('minhaOut'); if(!box) return;
+  const p=S.pessoas.find(x=>x.id===pessoaLogada);
+  if(!p){ box.innerHTML='<div class="card mini-info">Sem cadastro.</div>'; return; }
+  const dias=Number((document.getElementById('miDias')||{}).value||30);
+  const desde=dias>=9999? 0 : Date.now()-dias*86400000;
+  const meus=S.ciclos.filter(c=>c.pessoa===p.id && c.fim && c.ini>=desde && !c.flag);
+  if(!meus.length){ box.innerHTML='<div class="card"><h2 style="margin-top:0;">Olá, '+p.nome+'!</h2><div class="mini-info">Ainda não há produção registrada neste período.</div></div>'; return; }
+  const porOp={};
+  meus.forEach(c=>{ const k=(c.opKey||c.op).split('|')[0];
+    if(!porOp[k]) porOp[k]={rotulo:c.rotulo, pcs:0, ms:0};
+    porOp[k].pcs+=qtdEfetiva(c); porOp[k].ms+=tempoUtil(c); });
+  const porDia={};
+  meus.forEach(c=>{ const d=fmtData(c.ini); if(!porDia[d]) porDia[d]={pcs:0, ms:0};
+    porDia[d].pcs+=qtdEfetiva(c); porDia[d].ms+=tempoUtil(c); });
+  const diasArr=Object.entries(porDia).map(([d,g])=>({d, media:g.pcs/(g.ms/3600000), pcs:g.pcs}));
+  const totPcs=meus.reduce((s,c)=>s+qtdEfetiva(c),0);
+  const totMs=meus.reduce((s,c)=>s+tempoUtil(c),0);
+  const mediaGeral=totPcs/(totMs/3600000);
+  const melhor=diasArr.reduce((a,b)=>b.media>a.media?b:a, diasArr[0]);
+
+  let html='<div class="card"><h2 style="margin-top:0;">Olá, '+p.nome+'!</h2>'+
+    '<div style="display:flex; gap:24px; flex-wrap:wrap; margin-top:8px;">'+
+    '<div><div class="mini-info">PEÇAS</div><div style="font-size:1.8rem; font-weight:800;">'+totPcs+'</div></div>'+
+    '<div><div class="mini-info">HORAS</div><div style="font-size:1.8rem; font-weight:800;">'+fmtH(totMs)+'</div></div>'+
+    '<div><div class="mini-info">MÉDIA</div><div style="font-size:1.8rem; font-weight:800;">'+Math.round(mediaGeral)+' <span style="font-size:.9rem;">pçs/h</span></div></div>'+
+    '<div><div class="mini-info">DIAS</div><div style="font-size:1.8rem; font-weight:800;">'+diasArr.length+'</div></div>'+
+    '</div></div>';
+
+  html+='<div class="card"><h3 style="margin-top:0;">Sua média por operação</h3><table>'+
+    '<tr><th>Operação</th><th>Peças</th><th>Média</th><th>Faixa</th><th>Para subir</th></tr>';
+  Object.entries(porOp).sort((a,b)=>b[1].ms-a[1].ms).forEach(([k,g])=>{
+    const md=g.pcs/(g.ms/3600000);
+    const f=faixaDe(k, md);
+    const [m70,m80,m90,m100]=metasDe(k);
+    let prox='—';
+    if(m70){
+      if(md<m70) prox='faltam '+Math.ceil(m70-md)+' p/ 70%';
+      else if(md<m80) prox='faltam '+Math.ceil(m80-md)+' p/ 80%';
+      else if(md<m90) prox='faltam '+Math.ceil(m90-md)+' p/ 90%';
+      else if(md<m100) prox='faltam '+Math.ceil(m100-md)+' p/ 100%';
+      else prox='faixa máxima!';
+    }
+    html+='<tr><td><b>'+g.rotulo+'</b></td><td>'+g.pcs+'</td><td><b>'+Math.round(md)+'</b> pçs/h</td>'+
+      '<td><span class="faixa '+f.cls+'">'+f.tx+'</span></td><td class="mini-info">'+prox+'</td></tr>';
+  });
+  html+='</table></div>';
+
+  html+='<div class="card"><h3 style="margin-top:0;">Seu melhor dia</h3>'+
+    '<div>🏆 <b>'+melhor.d+'</b> · '+Math.round(melhor.media)+' pçs/h · '+melhor.pcs+' peças</div></div>';
+
+  const max=Math.max(...diasArr.map(d=>d.media),1);
+  html+='<div class="card"><h3 style="margin-top:0;">Seu ritmo dia a dia (pçs/h)</h3>'+
+    '<div style="display:flex; align-items:flex-end; gap:6px; height:170px; padding:8px; overflow-x:auto;">'+
+    diasArr.map(d=>{
+      const alt=Math.max(6, (d.media/max)*130);
+      return '<div style="display:flex; flex-direction:column; align-items:center; min-width:44px;">'+
+        '<div style="font-size:.7rem; font-weight:700;">'+Math.round(d.media)+'</div>'+
+        '<div style="width:34px; height:'+alt+'px; background:#3d4d32; border-radius:3px 3px 0 0;"></div>'+
+        '<div class="mini-info" style="font-size:.65rem;">'+d.d.slice(0,5)+'</div></div>';
+    }).join('')+'</div></div>';
+
+  box.innerHTML=html;
+}
 function aplicarPerfil(){
   const a=acessoCfg();
   const admin=perfilAtivo==='admin';
-  // telas sempre liberadas: bip, painel. Marcas e ajustes: só admin. Demais: por permissão.
-  const regra={bip:true, painel:true, relat:admin||a.perms.relat, ops:admin||a.perms.ops, marcas:admin, hist:admin||a.perms.hist, alertas:admin||a.perms.alertas, ajustes:admin};
+  const dono=perfilAtivo==='dono';
+  const cost=perfilAtivo==='costureira';
+  let regra;
+  if(cost)      regra={minha:true};                                  // só a própria produção
+  else if(dono) regra={minha:false, painel:true, relat:true};        // vê tudo, sem mexer
+  else          regra={bip:true, painel:true, relat:admin||a.perms.relat, ops:admin||a.perms.ops,
+                       marcas:admin, hist:admin||a.perms.hist, alertas:admin||a.perms.alertas, ajustes:admin};
   document.querySelectorAll('nav button[data-t]').forEach(b=>{
     b.classList.toggle('oculto', !regra[b.dataset.t]);
   });
-  // botão de entrada e modo teste
   const be=document.getElementById('btnEntrada'); if(be) be.style.display=temPermissao('entrada')?'':'none';
   const simCard=document.getElementById('simu'); if(simCard) simCard.parentElement.style.display=admin?'':'none';
-  // se a aba ativa ficou escondida, volta pra bipagem
   const ativa=document.querySelector('nav button[data-t].on');
-  if(ativa && ativa.classList.contains('oculto')) document.querySelector('nav button[data-t="bip"]').click();
-  // rodapé de usuário
+  if(!ativa || ativa.classList.contains('oculto')){
+    const primeira=[...document.querySelectorAll('nav button[data-t]')].find(b=>!b.classList.contains('oculto'));
+    if(primeira) primeira.click();
+  }
   const su=document.getElementById('sbUser');
-  if(su) su.innerHTML=(admin?'Conectado: <b>'+a.adminUser+'</b> (gestor)':'Conectado: <b>'+a.opUser+'</b> (operadora)')+'<br><button onclick="sair()">Sair</button>';
+  if(su){
+    let quem;
+    if(admin) quem='Conectado: <b>'+a.adminUser+'</b> (gestor)';
+    else if(dono) quem='Conectado: <b>'+a.donoUser+'</b> (dono)';
+    else if(cost){ const p=S.pessoas.find(x=>x.id===pessoaLogada); quem='Conectada: <b>'+(p?p.nome:'')+'</b>'; }
+    else quem='Conectado: <b>'+a.opUser+'</b> (operadora)';
+    su.innerHTML=quem+'<br><button onclick="sair()">Sair</button>';
+  }
+  if(cost) renderMinha();
   renderAcesso();
+}
+function salvarAcessoDono(){
+  if(!podeEditar()) return alert('Só o gestor altera acessos.');
+  const a=acessoCfg();
+  a.donoUser=limparTexto(acDonoUser.value)||'edvilson';
+  a.donoPass=(acDonoPass.value||'').trim()||'2610';
+  salvarTudo(); alert('Acesso do dono salvo.');
+}
+function trocarSenhaPessoa(pid){
+  if(!podeEditar()) return;
+  const p=S.pessoas.find(x=>x.id===pid); if(!p) return;
+  const v=prompt('Nova senha de '+p.nome+' (só números, 4 dígitos):', p.pass||'');
+  if(v===null) return;
+  const s=String(v).trim();
+  if(!/^\d{4}$/.test(s)) return alert('Use 4 números. Ex: 1234');
+  p.pass=s; salvarTudo(); renderAcesso();
+}
+function novaSenhaPessoa(pid){
+  const p=S.pessoas.find(x=>x.id===pid); if(!p || !podeEditar()) return;
+  p.pass=senhaAleatoria(); salvarTudo(); renderAcesso();
+}
+function imprimirAcessos(){
+  const a=acessoCfg();
+  const linhas=S.pessoas.map(p=>
+    '<div style="border:1px solid #ccc; border-radius:6px; padding:14px; margin-bottom:10px; page-break-inside:avoid;">'+
+    '<div style="font-size:15pt; font-weight:800;">'+p.nome+'</div>'+
+    '<div style="font-size:11pt; margin-top:6px;">Site: <b>borinelliconfeccoes.github.io/producao</b></div>'+
+    '<div style="font-size:13pt; margin-top:4px;">Usuário: <b>'+p.user+'</b> &nbsp;·&nbsp; Senha: <b>'+p.pass+'</b></div>'+
+    '<div style="font-size:9pt; color:#666; margin-top:6px;">Você vê a sua produção: peças, média por hora e a sua evolução.</div>'+
+    '</div>').join('');
+  const w=window.open('','_blank');
+  w.document.write('<html><head><title>Acessos</title></head><body style="font-family:sans-serif; padding:18px;">'+
+    '<h2 style="margin:0 0 12px;">Borinelli Confecções · Acessos</h2>'+linhas+
+    '</body></html>');
+  w.document.close(); w.focus(); w.print();
 }
 function renderAcesso(){
   const a=acessoCfg();
   const g=(id,v)=>{ const el=document.getElementById(id); if(el) el.value=v; };
   g('acAdminUser',a.adminUser); g('acAdminPass',a.adminPass); g('acOpUser',a.opUser); g('acOpPass',a.opPass);
+  g('acDonoUser',a.donoUser); g('acDonoPass',a.donoPass);
   ['relat','ops','hist','alertas','entrada'].forEach(k=>{ const el=document.getElementById('perm-'+k); if(el) el.checked=!!a.perms[k]; });
+  const t=document.getElementById('tabAcessoPessoas');
+  if(t){
+    t.innerHTML='<tr><th>Pessoa</th><th>Usuário</th><th>Senha</th><th></th></tr>'+
+      S.pessoas.map(p=>'<tr><td><b>'+p.nome+'</b></td><td>'+(p.user||'—')+'</td><td><b>'+(p.pass||'—')+'</b></td>'+
+        '<td style="white-space:nowrap;"><button class="acao mini sec" onclick="trocarSenhaPessoa(\''+p.id+'\')">Trocar</button> '+
+        '<button class="acao mini sec" onclick="novaSenhaPessoa(\''+p.id+'\')">Sortear</button></td></tr>').join('');
+  }
 }
 function salvarAcesso(){
   if(!podeEditar()) return alert('Só o gestor altera acessos.');
@@ -2470,33 +2670,124 @@ function renderComparativo(){
   });
   cmpOut.innerHTML = linhas.length? html+'</table></div>' : '<div class="card mini-info">Ninguém fez essa operação nos últimos 30 dias.</div>';
 }
+/* ---- Sugestão automática de metas (quando já há dados suficientes) ---- */
+const MIN_DIAS_META = 5;    // dias válidos
+const MIN_HORAS_META = 20;  // horas acumuladas
+const MIN_H_DIA = 2;        // dia com menos que isso não entra (muito ruidoso)
+// proporção das faixas, tirada da tabela oficial da Lateral: 75 / 80 / 90 / 100
+const FORMA_FAIXAS = [0.75, 0.80, 0.90, 1.00];
+function dadosOp(opId){
+  const porDia={};
+  let pcs=0, ms=0;
+  S.ciclos.forEach(c=>{
+    if(!c.fim || c.flag || c.lote) return;
+    if((c.opKey||c.op||'').split('|')[0]!==opId) return;
+    const k=c.pessoa+'|'+new Date(c.ini).toDateString();
+    if(!porDia[k]) porDia[k]={pcs:0, ms:0};
+    porDia[k].pcs+=qtdEfetiva(c); porDia[k].ms+=tempoUtil(c);
+    pcs+=qtdEfetiva(c); ms+=tempoUtil(c);
+  });
+  const rates=[];
+  Object.values(porDia).forEach(d=>{
+    const h=d.ms/3600000;
+    if(h>=MIN_H_DIA) rates.push(d.pcs/h);
+  });
+  return {pcs, horas: ms/3600000, dias:Object.keys(porDia).length, diasValidos:rates.length,
+          rates: rates.sort((a,b)=>a-b), media: ms? pcs/(ms/3600000) : 0};
+}
+function percentil(arr, p){
+  if(!arr.length) return 0;
+  if(arr.length===1) return arr[0];
+  const i=(p/100)*(arr.length-1);
+  const lo=Math.floor(i), hi=Math.ceil(i);
+  return arr[lo] + (arr[hi]-arr[lo])*(i-lo);
+}
+function metasSugeridas(opId){
+  const d=dadosOp(opId);
+  if(d.diasValidos < MIN_DIAS_META || d.horas < MIN_HORAS_META) return null;
+  // "100%" = ritmo que as boas costureiras sustentam (percentil 80 dos dias), não o melhor dia solto
+  const alvo=percentil(d.rates, 80);
+  if(!alvo) return null;
+  return FORMA_FAIXAS.map(r=>Math.round(alvo*r/5)*5);
+}
+function aplicarMetaSugerida(opId){
+  const m=metasSugeridas(opId); if(!m) return;
+  const op=S.opsBase.find(o=>o.id===opId); if(!op) return;
+  if(!confirm('Definir a meta de "'+op.nome+'" como\n\n70%: '+m[0]+'\n80%: '+m[1]+'\n90%: '+m[2]+'\n100%: '+m[3]+' pçs/h\n\nVocê pode ajustar depois em Ajustes → Operações.')) return;
+  op.metas=m; salvarTudo(); renderTudo();
+}
+function aplicarTodasSugestoes(){
+  const pend=S.opsBase.filter(o=>(!o.metas||!o.metas[0]) && metasSugeridas(o.id));
+  if(!pend.length) return alert('Ainda não há operações com dados suficientes.');
+  const txt=pend.map(o=>'  • '+o.nome+': '+metasSugeridas(o.id).join(' / ')).join('\n');
+  if(!confirm('Definir a meta destas '+pend.length+' operações?\n\n'+txt+'\n\nVocê pode ajustar cada uma depois em Ajustes → Operações.')) return;
+  pend.forEach(o=>{ o.metas=metasSugeridas(o.id); });
+  salvarTudo(); renderTudo();
+  alert(pend.length+' metas definidas.');
+}
 function renderCalibra(){
-  const desde=Date.now()-60*86400000;
-  const porKey={};
-  S.ciclos.filter(c=>c.fim && c.ini>=desde).forEach(c=>{
-    if(!porKey[c.opKey]) porKey[c.opKey]={rotulo:c.rotulo, pcs:0, ms:0, n:0};
-    const g=porKey[c.opKey]; g.pcs+=qtdEfetiva(c); g.ms+=tempoUtil(c); g.n++;
+  const semMeta=S.opsBase.filter(o=>!o.metas || !o.metas[0]);
+  const comDados=semMeta.map(o=>({op:o, d:dadosOp(o.id), sug:metasSugeridas(o.id)})).filter(x=>x.d.horas>0);
+  const prontas=comDados.filter(x=>x.sug).length;
+  let topo='';
+  const ref=refPonderada('LATERAL');
+  if(ref) topo+='<div class="callout-ref" style="background:#fff; border-left:4px solid var(--dourado,#c7a581); padding:8px 10px; border-radius:4px; margin-bottom:10px; font-size:13px;">'+
+    '<b>Referência das laterais (ponderada):</b> '+Math.round(ref.media)+' pçs/h '+
+    '<span class="mini-info">('+ref.pcs+' peças ÷ '+ref.horas.toFixed(1)+' h, somando todas as variações de lateral)</span><br>'+
+    '<span class="mini-info">Enquanto a variação não tem meta própria, a faixa é calculada contra essa referência.</span></div>';
+  if(prontas) topo+='<div style="background:#eef5e6; border-left:4px solid #4d7c2a; padding:8px 10px; border-radius:4px; margin-bottom:10px; font-size:13px;">'+
+    '<b>'+prontas+' operação(ões) já têm dados suficientes</b> para virar meta. '+
+    '<button class="acao mini" onclick="aplicarTodasSugestoes()">✓ Aplicar as metas sugeridas</button></div>';
+
+  let html='<tr><th>Variação</th><th>Dados</th><th>Média real</th><th>Meta 70/80/90/100</th><th></th></tr>';
+  // 1) as que ainda não têm meta
+  comDados.sort((a,b)=>b.d.horas-a.d.horas).forEach(({op,d,sug})=>{
+    const falta=[];
+    if(d.diasValidos<MIN_DIAS_META) falta.push((MIN_DIAS_META-d.diasValidos)+' dia(s)');
+    if(d.horas<MIN_HORAS_META) falta.push(Math.ceil(MIN_HORAS_META-d.horas)+'h');
+    const stat = sug
+      ? '<b style="color:#4d7c2a;">'+sug.join(' / ')+'</b> <span class="mini-info">(sugerida)</span>'
+      : '<span class="mini-info">faltam '+falta.join(' e ')+' de dados</span>';
+    const btn = sug
+      ? '<button class="acao mini" onclick="aplicarMetaSugerida(\''+op.id+'\')">✓ Usar esta meta</button>'
+      : '<button class="acao mini sec" onclick="definirMeta(\''+op.id+'\')">Definir na mão</button>';
+    html+='<tr><td><b>'+op.nome+'</b></td>'+
+      '<td class="mini-info">'+d.diasValidos+' dia(s) · '+d.horas.toFixed(1)+'h · '+d.pcs+' pçs</td>'+
+      '<td><b>'+Math.round(d.media)+'</b> pçs/h</td>'+
+      '<td>'+stat+'</td><td>'+btn+'</td></tr>';
   });
-  let html='<tr><th>Variação</th><th>Ciclos</th><th>Média real</th><th>Meta 70/80/90/100</th><th></th></tr>';
-  Object.entries(porKey).sort((a,b)=>b[1].ms-a[1].ms).forEach(([k,g])=>{
-    const media=Math.round(g.pcs/(g.ms/3600000));
-    const m=metasDe(k);
-    html+='<tr><td><b>'+g.rotulo+'</b></td><td>'+g.n+'</td><td><b>'+media+'</b> pçs/h</td><td>'+(m[0]? m.join(' / '):'sem meta')+'</td>'+
-    '<td><button class="acao mini sec" onclick="definirMeta(\''+k.replace(/'/g,"\\'")+'\')">Definir meta</button></td></tr>';
-  });
-  tabCalibra.innerHTML = Object.keys(porKey).length? html : '<tr><td class="mini-info">Ainda sem ciclos registrados para calibrar.</td></tr>';
+  // 2) as que já têm meta (só pra conferir contra o real)
+  const comMeta=S.opsBase.filter(o=>o.metas && o.metas[0]).map(o=>({op:o, d:dadosOp(o.id)})).filter(x=>x.d.horas>0);
+  if(comMeta.length){
+    html+='<tr><td colspan="5" style="padding-top:12px;"><b class="mini-info">JÁ TÊM META (real x meta)</b></td></tr>';
+    comMeta.sort((a,b)=>b.d.horas-a.d.horas).forEach(({op,d})=>{
+      const f=faixaDe(op.id, d.media);
+      html+='<tr><td>'+op.nome+'</td>'+
+        '<td class="mini-info">'+d.diasValidos+' dia(s) · '+d.horas.toFixed(1)+'h</td>'+
+        '<td><b>'+Math.round(d.media)+'</b> pçs/h</td>'+
+        '<td>'+op.metas.join(' / ')+' <span class="faixa '+f.cls+'">'+f.tx+'</span></td>'+
+        '<td><button class="acao mini sec" onclick="definirMeta(\''+op.id+'\')">Ajustar</button></td></tr>';
+    });
+  }
+  document.getElementById('calibraTopo').innerHTML=topo;
+  tabCalibra.innerHTML = (comDados.length||comMeta.length)? html : '<tr><td class="mini-info">Ainda sem ciclos registrados para calibrar.</td></tr>';
   // select do comparativo
+  const porKey={};
+  S.ciclos.filter(c=>c.fim).forEach(c=>{ if(!porKey[c.opKey]) porKey[c.opKey]={rotulo:c.rotulo}; });
   const atual=cmpOp.value;
   cmpOp.innerHTML=Object.entries(porKey).map(([k,g])=>'<option value="'+k+'">'+g.rotulo+'</option>').join('');
   if(atual) cmpOp.value=atual;
 }
 function definirMeta(key){
   if(!autorizado()) return;
-  const v=prompt('Metas para essa variação, separadas por vírgula (70,80,90,100):', (metasDe(key)||[]).join(','));
+  const v=prompt('Metas para essa operação, separadas por vírgula (70,80,90,100):', (metasDe(key)||[]).join(','));
   if(v===null) return;
   const m=v.split(',').map(x=>Number(x.trim()));
   if(m.length!==4 || m.some(isNaN)) return alert('Formato inválido. Ex: 120,140,160,180');
-  S.metasVar[key]=m; salvarTudo(); renderCalibra();
+  const base=S.opsBase.find(o=>o.id===key);
+  if(base){ base.metas=m; delete S.metasVar[key]; }   // operação do sistema: grava na própria
+  else S.metasVar[key]=m;                              // variação específica (com tamanho/marca)
+  salvarTudo(); renderTudo();
 }
 
 /* ================= OCORRÊNCIAS ================= */
@@ -2687,8 +2978,11 @@ function addPessoa(){
     if(!ex || S.pessoas.some(p=>p.id===id)){ let k=2; while(S.pessoas.some(p=>p.id===idDe(n)+k)) k++; id=idDe(n)+k; if(!ex) n=n+' '+k; }
   }
   const fone=(novaPessoaFone.value||'').replace(/\D/g,'');
-  S.pessoas.push({id,nome:n,fone}); novaPessoa.value=''; novaPessoaFone.value='';
+  const p={id,nome:n,fone};
+  gerarAcessoPessoa(p);              // já nasce com login e senha
+  S.pessoas.push(p); novaPessoa.value=''; novaPessoaFone.value='';
   salvarTudo(); renderTudo();
+  alert('Pessoa cadastrada.\n\nAcesso de '+n+':\n  usuário: '+p.user+'\n  senha: '+p.pass+'\n\nEla vê só a produção dela. Os acessos ficam em Ajustes → Sistema.');
 }
 function editarFone(id){
   const p=S.pessoas.find(x=>x.id===id); if(!p) return;
@@ -2738,7 +3032,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.21.0';
+const VERSAO = '3.23.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2835,7 +3129,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
