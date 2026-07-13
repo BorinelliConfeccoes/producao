@@ -17,6 +17,7 @@ if('serviceWorker' in navigator && location.protocol.startsWith('http')){
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
   --verde:#3d4d32; --verde-esc:#2b3823; --creme:#f6fdeb; --dourado:#c7a581;
@@ -261,12 +262,15 @@ nav button.oculto{display:none;}
     <div>
       <div class="card" style="border-left:6px solid var(--dourado); display:flex; gap:26px; flex-wrap:wrap; align-items:center;" id="cardSaida"></div>
       <div id="alertasAbastecimento"></div>
-      <h2>OPs em andamento</h2>
-      <div id="painelOps"></div>
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer; font-weight:800; color:var(--verde); padding:8px 0;">Ver progresso detalhado das OPs</summary>
+        <div id="painelOps" style="margin-top:8px;"></div>
+      </details>
     </div>
     <div>
       <h2 style="margin-top:0;">Célula agora</h2>
       <div class="grid" id="painelCards" style="grid-template-columns:1fr;"></div>
+      <div id="painelIdle"></div>
       <h2>Resumo do dia</h2>
       <div class="card"><table id="tabDia"></table></div>
     </div>
@@ -444,6 +448,10 @@ nav button.oculto{display:none;}
       <div><label>Anomalia se fora de (%)</label><input id="cfgAnom" type="number" style="width:90px;"></div>
       <div><label>Fila baixa se menor que (pçs)</label><input id="cfgFila" type="number" style="width:110px;"></div>
       <div><label>Pacote parado se passar de (min)</label><input id="cfgEmpac" type="number" style="width:140px;"></div>
+    </div>
+    <div class="linhaform">
+      <div><label>Autoconfirmar bipagem após (s) · 0 = desligado</label><input id="cfgAuto" type="number" min="0" max="10" style="width:100px;"></div>
+      <div><label>Som e vibração no bip</label><select id="cfgSom" style="width:120px;"><option value="sim">Ligado</option><option value="nao">Desligado</option></select></div>
       <button class="acao" onclick="salvarCfg()">Salvar regras</button>
     </div>
   </div>
@@ -490,6 +498,16 @@ nav button.oculto{display:none;}
     </div>
   </div>
   <div class="card">
+    <h2 style="margin-top:0;">Importar produção de planilha (Excel)</h2>
+    <div class="mini-info" style="margin-bottom:8px;">Traz o que já foi produzido (peças e horas por dia) pra calibrar as médias antes de começar a bipar. Pode mandar várias planilhas de uma vez, uma por pessoa. O que já foi importado antes não duplica.</div>
+    <div class="linhaform">
+      <button class="acao" onclick="importarPlanilhaClick()">📊 Importar planilhas</button>
+      <input type="file" id="arqPlanilha" accept=".xlsx,.xls" multiple style="display:none;" onchange="importarPlanilha(this.files)">
+      <button class="acao sec" onclick="if(autorizado() && confirm('Apagar só os lançamentos IMPORTADOS de planilha? Os bipados ficam.')){S.ciclos=S.ciclos.filter(c=>!c.importado); salvarTudo(); renderTudo(); alert('Lançamentos importados removidos.');}">Remover importados</button>
+    </div>
+    <div id="mapaOpsBox"></div>
+  </div>
+  <div class="card">
     <h2 style="margin-top:0;">Dados</h2>
     <div class="linhaform">
       <button class="acao sec" onclick="baixarBackup()">Baixar backup completo</button>
@@ -517,6 +535,10 @@ nav button.oculto{display:none;}
   <div class="caixa">
     <div class="topo"><div class="tt">Confirmar registro</div><div class="st">BORINELLI · PRODUÇÃO</div></div>
     <div class="corpo" id="confCorpo"></div>
+    <div id="autoBar" style="display:none; margin:0 0 10px; padding:8px 12px; background:#f2efe2; border-radius:8px; text-align:center;">
+      <div style="font-weight:800; color:var(--verde); margin-bottom:6px;" id="autoBarTxt">Confirmando…</div>
+      <div style="height:6px; background:#dcd7c2; border-radius:99px; overflow:hidden;"><div id="autoBarFill" style="height:100%; width:0%; background:var(--verde);"></div></div>
+    </div>
     <div class="btns-grandes">
       <button class="btn-g no" onclick="cancelarCiclo()">✕ Cancelar</button>
       <button class="btn-g ok" onclick="confirmarCiclo()">✓ Confirmar</button>
@@ -941,6 +963,42 @@ function proporCiclo(pessoaId, pk){
     trocaTam, tamAnterior, repasseDe, fecharAoConfirmar};
   document.getElementById('confCorpo').innerHTML=montarConfCorpo(propostaAtual);
   mostrarModal('confModal');
+  agendarAutoConfirm();
+}
+let _autoTimer=null, _autoRAF=null;
+function cancelAutoConfirm(){
+  if(_autoTimer){ clearTimeout(_autoTimer); _autoTimer=null; }
+  if(_autoRAF){ cancelAnimationFrame(_autoRAF); _autoRAF=null; }
+  const bar=document.getElementById('autoBar'); if(bar) bar.style.display='none';
+}
+function agendarAutoConfirm(){
+  cancelAutoConfirm();
+  const seg=Number(S.cfg.autoConfirm)||0;
+  const p=propostaAtual;
+  if(seg<=0 || !p) return;
+  if(p.retido || p.fecharAoConfirmar || p.trocaTam) return; // casos que pedem conferência ficam manuais
+  const bar=document.getElementById('autoBar'), fill=document.getElementById('autoBarFill'), txt=document.getElementById('autoBarTxt');
+  if(!bar||!fill) return;
+  bar.style.display='block'; if(txt) txt.textContent='Confirmando em '+seg+'s… toque em Cancelar se errou';
+  const ini=Date.now(), durMs=seg*1000;
+  const passo=()=>{ const t=Math.min(1,(Date.now()-ini)/durMs); fill.style.width=(t*100)+'%'; if(t<1) _autoRAF=requestAnimationFrame(passo); };
+  _autoRAF=requestAnimationFrame(passo);
+  _autoTimer=setTimeout(()=>{ _autoTimer=null; if(propostaAtual) confirmarCiclo(); }, durMs);
+}
+function feedbackBip(ok){
+  if(S.cfg.somVibra===false) return;
+  try{ if(navigator.vibrate) navigator.vibrate(ok?55:[40,50,40]); }catch(e){}
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext; if(!AC) return;
+    if(!window._ac) window._ac=new AC();
+    const ac=window._ac; if(ac.state==='suspended') ac.resume();
+    const o=ac.createOscillator(), g=ac.createGain();
+    o.frequency.value= ok?880:200; o.type='sine'; o.connect(g); g.connect(ac.destination);
+    g.gain.setValueAtTime(.0001, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(.14, ac.currentTime+.01);
+    g.gain.exponentialRampToValueAtTime(.0001, ac.currentTime+(ok?.16:.28));
+    o.start(); o.stop(ac.currentTime+.3);
+  }catch(e){}
 }
 function montarConfCorpo(p){
   const retido = p.retido? p.retido.qtd : 0;
@@ -962,6 +1020,7 @@ function montarConfCorpo(p){
   return h;
 }
 function reterPecas(){
+  cancelAutoConfirm();
   const p=propostaAtual; if(!p) return;
   const jaRet = p.retido? p.retido.qtd : 0;
   const max = p.qtd - 1;
@@ -977,6 +1036,7 @@ function reterPecas(){
 }
 let ultimaAcao=null;
 function confirmarCiclo(){
+  cancelAutoConfirm();
   const p=propostaAtual; if(!p){ ocultarModais(); return; }
   const agora=Date.now();
   const o=S.ordens.find(x=>x.num===p.num);
@@ -1012,7 +1072,10 @@ function confirmarCiclo(){
   }
   // se este pacote estava aguardando material e foi bipado agora, libera
   if(o){ const tt=o.tamanhos.find(x=>x.tam===p.tam); const pp=tt&&tt.pacotes.find(x=>String(x.n)===String(p.nPac)); if(pp&&pp.aguardando) delete pp.aguardando; }
-  flash(true, p.pessoaNome+' · '+p.rotulo, 'OP '+p.num+' · '+p.tam+'-'+p.nPac+' · '+efetiva+' peças'+(retido?' · '+retido+' retidas ('+p.nPac+'R)':''));
+  const hojeStr=new Date().toDateString();
+  const acumHoje=S.ciclos.filter(c=>c.pessoa===p.pessoaId && new Date(c.ini).toDateString()===hojeStr).reduce((s,c)=>s+qtdEfetiva(c),0);
+  flash(true, acumHoje+' pçs hoje ✓', p.pessoaNome+' · '+p.rotulo+' · '+p.tam+'-'+p.nPac+' · +'+efetiva+(retido?' · '+retido+' retidas ('+p.nPac+'R)':''));
+  feedbackBip(true);
   ultimaOpPessoa[p.pessoaId]=p.base; opSelecionada=p.base;
   ultimaAcao={ snap:_snap, novoId:agora+'-'+p.pessoaId, resumo:p.pessoaNome+' · '+p.rotulo+' · '+p.tam+'-'+p.nPac+' ('+efetiva+' pç)' };
   propostaAtual=null; limparPend();
@@ -1037,6 +1100,7 @@ function renderDesfazer(){
   else bar.style.display='none';
 }
 function cancelarCiclo(){
+  cancelAutoConfirm();
   propostaAtual=null; limparPend(); ocultarModais();
   flash(true,'Cancelado','Nada foi registrado');
 }
@@ -1474,7 +1538,159 @@ function addTamTemp(){
 function renderTamsTemp(){
   tamsTemp.innerHTML=tamsTempArr.map((t,i)=>'<span class="chip">'+(t.cor?'<b style="color:var(--verde);">'+t.cor+'</b> ':'')+(t.tamBase||t.tam)+(t.ton?'·'+t.ton:'')+': '+t.total+' pçs ('+t.pacotes.map(p=>p.qtd).join('+')+') <b style="cursor:pointer;" onclick="tamsTempArr.splice('+i+',1); renderTamsTemp();">✕</b></span>').join('');
 }
-/* ---- Importador de nota fiscal (NF-e XML) ---- */
+/* ---- Importador de planilha de produção (Excel) ---- */
+function normOp(s){ return String(s||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,' ').replace(/\s+/g,' ').trim(); }
+function lerPlanilhaProducao(wb, nomeArquivo){
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  const g=XLSX.utils.sheet_to_json(ws,{header:1, raw:true, defval:null});
+  const isData=v=> v instanceof Date || (typeof v==='number' && v>40000 && v<60000);
+  const toData=v=>{ if(v instanceof Date) return v; const d=XLSX.SSF.parse_date_code(v); return d? new Date(d.y,d.m-1,d.d) : null; };
+  // acha as linhas-chave
+  let rData=-1, rOp=-1, rHoras=-1;
+  g.forEach((row,i)=>{
+    if(rData<0 && row.filter(isData).length>=2) rData=i;
+    const t=row.map(x=>normOp(x));
+    if(rHoras<0 && t.some(x=>x==='HORAS')) rHoras=i;
+  });
+  if(rData<0) throw new Error('não achei a linha das datas');
+  // a linha de operação é a primeira abaixo das datas com texto
+  for(let i=rData+1;i<Math.min(rData+4,g.length);i++){
+    const row=g[i]||[];
+    if(row.some(x=> typeof x==='string' && normOp(x).length>2)){ rOp=i; break; }
+  }
+  if(rOp<0) throw new Error('não achei a linha das operações');
+  if(rHoras<0) throw new Error('não achei a linha de HORAS');
+  // acha a linha TOTAL (se existir) pra não somar ela junto com os lançamentos
+  let rTotal=-1;
+  for(let i=rOp+1;i<rHoras;i++){ if((g[i]||[]).some(x=>normOp(x)==='TOTAL')){ rTotal=i; break; } }
+  const fimSoma = rTotal>=0 ? rTotal : rHoras;
+  // nome da pessoa: célula de texto solta na área de cima, ou o nome do arquivo
+  let pessoa='';
+  const nomesConhecidos=S.pessoas.map(p=>normOp(p.nome));
+  for(let i=0;i<=rData+1 && !pessoa;i++) (g[i]||[]).forEach((v,j)=>{
+    if(!pessoa && typeof v==='string' && nomesConhecidos.includes(normOp(v))) pessoa=String(v).trim();
+  });
+  if(!pessoa){ const base=String(nomeArquivo||'').replace(/\.[^.]+$/,''); if(base) pessoa=base.trim(); }
+  // varre as colunas
+  const lanc=[];
+  const ncols=Math.max(...g.slice(rData,rHoras+1).map(r=>(r||[]).length));
+  for(let c=0;c<ncols;c++){
+    const dv=(g[rData]||[])[c]; if(!isData(dv)) continue;
+    const data=toData(dv); if(!data) continue;
+    const opTxt=(g[rOp]||[])[c]; if(!opTxt || typeof opTxt!=='string') continue;
+    const horas=Number((g[rHoras]||[])[c])||0;
+    // soma os lançamentos entre a linha de operação e a linha TOTAL (ou HORAS)
+    let pecas=0;
+    for(let i=rOp+1;i<fimSoma;i++){
+      const v=(g[i]||[])[c];
+      const n=Number(v);
+      if(typeof v==='number' && isFinite(n) && n>0) pecas+=n;
+    }
+    // se não houver lançamentos detalhados, usa o valor da linha TOTAL
+    if(pecas===0 && rTotal>=0){ const tv=Number((g[rTotal]||[])[c])||0; if(tv>0) pecas=tv; }
+    if(pecas>0 && horas>0) lanc.push({pessoa, data, opTxt:String(opTxt).trim(), pecas, horas});
+  }
+  return {pessoa, lanc};
+}
+function importarPlanilhaClick(){
+  if(!autorizado()) return;
+  if(!S.pessoas.length) return alert('Cadastre as pessoas primeiro em Ajustes → Pessoas.');
+  const lista=S.pessoas.map((p,i)=>(i+1)+' = '+p.nome).join('\n');
+  const r=prompt('De quem é a planilha que você vai importar?\n\n'+lista+'\n\nDigite o número (ou 0 para o sistema tentar identificar sozinho pelo arquivo):','');
+  if(r===null) return;
+  const n=Number(r);
+  if(n===0){ _pessoaImport=null; }
+  else if(n>=1 && n<=S.pessoas.length){ _pessoaImport=S.pessoas[n-1]; }
+  else return alert('Número inválido.');
+  const f=document.getElementById('arqPlanilha'); f.value=''; f.click();
+}
+let _pessoaImport=null;
+async function importarPlanilha(files){
+  if(!files||!files.length) return;
+  if(typeof XLSX==='undefined') return alert('A biblioteca de Excel não carregou. Confira a internet e recarregue a página.');
+  try{
+    const escolhida=_pessoaImport; _pessoaImport=null;
+    let todos=[], semPessoa=[];
+    for(const file of files){
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(buf,{type:'array', cellDates:true});
+      const r=lerPlanilhaProducao(wb, file.name);
+      if(!r.lanc.length) continue;
+      let pid, pnome;
+      if(escolhida){ pid=escolhida.id; pnome=escolhida.nome; }
+      else {
+        const achou=S.pessoas.find(p=>normOp(p.nome)===normOp(r.pessoa));
+        if(achou){ pid=achou.id; pnome=achou.nome; } else { semPessoa.push(r.pessoa||file.name); continue; }
+      }
+      r.lanc.forEach(l=>{ l.pessoaId=pid; l.pessoa=pnome; todos.push(l); });
+    }
+    if(semPessoa.length && !todos.length) return alert('Não reconheci a pessoa: '+[...new Set(semPessoa)].join(', ')+'.\n\nEscolha a pessoa na lista ao importar, ou cadastre com esse mesmo nome em Ajustes → Pessoas.');
+    if(!todos.length) return alert('Não encontrei lançamentos nessas planilhas. Confira se elas têm as linhas de data, operação e HORAS.');
+    if(escolhida && files.length>1 && !confirm('Você escolheu '+escolhida.nome+'.\n\nTodas as '+files.length+' planilhas selecionadas vão ser importadas como sendo dela. Continuar?')) return;
+    // mapeamento das operações da planilha -> operações do sistema
+    S.mapaOps=S.mapaOps||{};
+    const siglas=[...new Set(todos.map(l=>normOp(l.opTxt)))];
+    const faltam=siglas.filter(s=>!S.mapaOps[s]);
+    if(faltam.length){
+      for(const s of faltam){
+        // tenta adivinhar pelo nome
+        const alvo=S.opsBase.find(o=>normOp(o.nome)===s) || S.opsBase.find(o=>normOp(o.nome).replace(/ DE /g,' ')===s.replace(/ DE /g,' '));
+        const lista=S.opsBase.map((o,i)=>(i+1)+' = '+o.nome).join('\n');
+        const sug=alvo? (S.opsBase.indexOf(alvo)+1) : '';
+        const r=prompt('Na planilha aparece a operação:\n\n"'+s+'"\n\nQual operação do sistema é essa?\n'+lista+'\n\nDigite o número (ou deixe vazio pra ignorar):', String(sug));
+        if(r===null) return;
+        const idx=Number(r)-1;
+        if(idx>=0 && idx<S.opsBase.length) S.mapaOps[s]=S.opsBase[idx].id;
+        else S.mapaOps[s]='__ignorar__';
+      }
+    }
+    // cria os ciclos
+    const loteId='L'+Date.now();
+    let criados=0, pulados=0, ignorados=0;
+    todos.forEach(l=>{
+      const opId=S.mapaOps[normOp(l.opTxt)];
+      if(!opId || opId==='__ignorar__'){ ignorados++; return; }
+      const dia=l.data; const chave='imp-'+l.pessoaId+'-'+dia.toISOString().slice(0,10)+'-'+opId;
+      if(S.ciclos.some(c=>c.id===chave)){ pulados++; return; }
+      const ini=new Date(dia); ini.setHours(7,0,0,0);
+      const durMs=l.horas*3600000;
+      const rotulo=(S.opsBase.find(o=>o.id===opId)||{}).nome||opId;
+      S.ciclos.push({id:chave, pessoa:l.pessoaId, op:opId, opKey:opId, rotulo, etapaIdx:-1,
+        ordem:'(planilha)', tam:'-', pacote:'-', qtd:l.pecas, ini:ini.getTime(), fim:ini.getTime()+durMs,
+        pausas:[], rateEfetivo:l.pecas/l.horas, importado:true, impLote:loteId});
+      criados++;
+    });
+    if(criados){
+      S.importacoes=S.importacoes||[];
+      const resumoPessoas=[...new Set(todos.map(l=>l.pessoa))].join(', ');
+      S.importacoes.push({lote:loteId, quando:Date.now(), pessoas:resumoPessoas, qtd:criados,
+        pecas:todos.reduce((s,l)=>s+l.pecas,0)});
+    }
+    salvarTudo(); renderTudo();
+    const resumo={};
+    todos.forEach(l=>{ const k=l.pessoa; resumo[k]=(resumo[k]||0)+l.pecas; });
+    alert('Planilhas importadas.\n\n'+criados+' lançamentos criados'+(pulados?'\n'+pulados+' já existiam (não dupliquei)':'')+(ignorados?'\n'+ignorados+' ignorados':'')+
+      '\n\nPor pessoa:\n'+Object.entries(resumo).map(([k,v])=>'  '+k+': '+v+' pçs').join('\n')+
+      '\n\nSe importou errado, use "Desfazer" na lista abaixo do botão.');
+  }catch(e){ alert('Não consegui ler a planilha: '+e.message); }
+}
+function desfazerImportacao(lote){
+  const imp=(S.importacoes||[]).find(x=>x.lote===lote); if(!imp) return;
+  if(!confirm('Desfazer esta importação?\n\n'+imp.pessoas+' · '+imp.qtd+' lançamentos · '+imp.pecas+' peças\n\nOs lançamentos bipados não são afetados.')) return;
+  S.ciclos=S.ciclos.filter(c=>c.impLote!==lote);
+  S.importacoes=(S.importacoes||[]).filter(x=>x.lote!==lote);
+  salvarTudo(); renderTudo();
+  alert('Importação desfeita.');
+}
+function renderImportacoes(){
+  const box=document.getElementById('mapaOpsBox'); if(!box) return;
+  const lst=(S.importacoes||[]).slice().reverse();
+  if(!lst.length){ box.innerHTML=''; return; }
+  box.innerHTML='<div style="margin-top:12px;"><b>Importações feitas</b>'+
+    lst.map(i=>'<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; padding:6px 0; border-bottom:1px dotted #ddd;">'+
+      '<span class="mini-info">'+i.pessoas+' · '+i.qtd+' lançamentos · '+i.pecas+' pçs · '+new Date(i.quando).toLocaleString('pt-BR')+'</span>'+
+      '<button class="acao mini sec" onclick="desfazerImportacao(\''+i.lote+'\')">↩ Desfazer</button></div>').join('')+'</div>';
+}
 function nfeBusca(root,nome){ const fila=[root]; while(fila.length){ const n=fila.shift(); if(n.localName===nome) return n; for(const c of n.children) fila.push(c); } return null; }
 function nfeTodos(root,nome){ const out=[]; const fila=[root]; while(fila.length){ const n=fila.shift(); if(n.localName===nome) out.push(n); for(const c of n.children) fila.push(c); } return out; }
 function nfeCap(s){ return String(s||'').toLowerCase().replace(/(^|\s)\S/g,c=>c.toUpperCase()).trim(); }
@@ -1823,31 +2039,30 @@ function liberarRetido(num,tam,n){
 }
 function renderPainel(){
   const agora=Date.now();
-  painelCards.innerHTML=S.pessoas.map(p=>{
-    const c=ciclosAbertos(p.id)[0];
-    if(!c) return '<div class="pcard"><div class="nome">'+p.nome+'</div><div class="op">Sem pacote aberto</div></div>';
+  const ativos=[], parados=[];
+  S.pessoas.forEach(p=>{ const c=ciclosAbertos(p.id)[0]; if(c) ativos.push({p,c}); else parados.push(p); });
+  let html='';
+  if(!ativos.length) html='<div class="pcard"><div class="op">Ninguém bipando agora.</div></div>';
+  ativos.forEach(({p,c})=>{
     const pausado=c.pausas.some(x=>!x.fim);
     const tipoPausa=pausado? PAUSAS[c.pausas.find(x=>!x.fim).tipo] : '';
     const util=tempoUtil(c);
     const base=baseline(p.id,c.opKey);
-    const rateAgora=c.qtd/(util/3600000);
-    const fx=faixaDe(c.opKey, rateAgora);
-    let eta='—', status='';
-    if(base){
-      const prevMs=c.qtd/base*3600000;
-      eta=fmtHora(c.ini+prevMs+(agora-c.ini-util));
-      const raz=util/prevMs;
-      status= raz<=0.95?'<span class="okpill">no ritmo ou acima</span>': raz<=1.1?'<span style="color:var(--f-70); font-weight:800;">na média</span>':'<span class="abxpill">abaixo da média</span>';
-    }
-    return '<div class="pcard'+(pausado?' pausado':'')+'">'+
-      '<div style="display:flex; justify-content:space-between;"><div class="nome">'+p.nome+'</div>'+(pausado?'<span class="badge">'+tipoPausa+'</span>':'')+'</div>'+
-      '<div class="op">'+c.rotulo+' · OP '+c.ordem+' · '+c.tam+'-'+c.pacote+' ('+c.qtd+' pçs)</div>'+
-      '<div class="nums">'+
-      '<div class="num"><b>'+fmtH(util)+'</b><span>Tempo útil</span></div>'+
-      '<div class="num"><b>'+Math.round(rateAgora)+'</b><span>pçs/h se fechar agora</span></div>'+
-      '<div class="num"><b>'+eta+'</b><span>Previsão término</span></div></div>'+
-      '<div style="margin-top:10px; display:flex; gap:10px; align-items:center;"><span class="faixa '+fx.cls+'">'+fx.tx+'</span> '+status+'</div></div>';
-  }).join('');
+    let termina, cls='';
+    if(pausado){ termina='⏸ Pausado'+(tipoPausa?' · '+tipoPausa:''); cls='tpausa'; }
+    else if(base){
+      const rest=(c.qtd/base*3600000)-util;
+      if(rest<=60000){ termina='Terminando agora'; cls='tok'; }
+      else termina='faltam ~'+Math.round(rest/60000)+' min · termina '+fmtHora(agora+rest);
+    } else termina='sem média ainda pra estimar';
+    html+='<div class="pcard'+(pausado?' pausado':'')+'">'+
+      '<div class="nome">'+p.nome+'</div>'+
+      '<div class="op" style="font-size:1.05em; margin-top:2px;">'+c.rotulo+' · '+c.tam+'-'+c.pacote+'</div>'+
+      '<div class="'+cls+'" style="margin-top:8px; font-weight:800; color:var(--verde);">'+termina+'</div></div>';
+  });
+  painelCards.innerHTML=html;
+  const idle=document.getElementById('painelIdle');
+  if(idle) idle.innerHTML = parados.length? '<div class="mini-info" style="margin-top:8px;">Sem pacote agora: '+parados.map(p=>p.nome).join(', ')+'</div>' : '';
   renderResumoDia();
 }
 function renderResumoDia(){
@@ -2208,13 +2423,16 @@ function preencherCfg(){
   cfgCafeIni.value=S.cfg.cafeIni; cfgCafeFim.value=S.cfg.cafeFim; cfgCafeTol.value=S.cfg.cafeTol;
   cfgTroca.value=S.cfg.troca; cfgAnom.value=S.cfg.anom; cfgFila.value=S.cfg.filaBaixa||70;
   const ce=document.getElementById('cfgEmpac'); if(ce) ce.value=S.cfg.empacadoMin||45;
+  const ca=document.getElementById('cfgAuto'); if(ca) ca.value=S.cfg.autoConfirm||0;
+  const cs=document.getElementById('cfgSom'); if(cs) cs.value=(S.cfg.somVibra===false)?'nao':'sim';
 }
 function salvarCfg(){
   if(!autorizado()) return;
   const ce=document.getElementById('cfgEmpac');
+  const ca=document.getElementById('cfgAuto'), cs=document.getElementById('cfgSom');
   S.cfg=Object.assign({}, S.cfg, {ini:cfgIni.value, fim:cfgFim.value, fimSex:cfgFimSex.value, cafeIni:cfgCafeIni.value, cafeFim:cfgCafeFim.value,
     cafeTol:Number(cfgCafeTol.value), troca:Number(cfgTroca.value), anom:Number(cfgAnom.value), filaBaixa:Number(cfgFila.value),
-    empacadoMin:Number(ce&&ce.value)||45});
+    empacadoMin:Number(ce&&ce.value)||45, autoConfirm:Math.max(0,Number(ca&&ca.value)||0), somVibra:(cs&&cs.value==='nao')?false:true});
   salvarTudo(); alert('Regras salvas.');
 }
 function addOpBase(){
@@ -2307,7 +2525,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.12.0';
+const VERSAO = '3.15.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -2392,7 +2610,7 @@ document.querySelectorAll('nav button').forEach(b=>{
     renderTudo();
   });
 });
-function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); }
+function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); renderImportacoes(); }
 /* atalhos: Enter confirma, Esc cancela nos modais */
 document.addEventListener('keydown', e=>{
   const conf=document.getElementById('confModal'), lac=document.getElementById('lacModal');
@@ -2404,7 +2622,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
