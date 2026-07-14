@@ -2849,7 +2849,7 @@ nav button.oculto{display:none;}
       <button class="acao sec" onclick="baixarBackup()">Baixar backup completo</button>
       <button class="acao sec" onclick="arqBackup.click()">Restaurar backup</button>
       <input type="file" id="arqBackup" accept=".json" style="display:none;" onchange="restaurarBackup(this)">
-      <button class="acao alerta" onclick="if(autorizado() && confirm('Apagar TODOS os ciclos registrados? OPs, marcas e cadastros ficam.')){S.ciclos=[]; salvarTudo(); renderTudo();}">Zerar ciclos</button>
+      <button class="acao alerta" onclick="if(autorizado() && confirm('Apagar TODOS os ciclos registrados? OPs, marcas e cadastros ficam.')){registrarRemocao('ciclos', S.ciclos.map(c=>c.id)); S.ciclos=[]; salvarTudo(); renderTudo();}">Zerar ciclos</button>
     </div>
   </div>
   </div>
@@ -2887,7 +2887,7 @@ nav button.oculto{display:none;}
     <div class="corpo" id="pacCorpo"></div>
     <div class="btns-grandes">
       <button class="btn-g no" onclick="cancelarPacotes()">&#10005; Cancelar</button>
-      <button class="btn-g ok" onclick="salvarPacotes()">&#10003; Salvar pacotes</button>
+      <button class="btn-g ok" id="btnSalvarPac" onclick="salvarPacotes()">&#10003; Salvar pacotes</button>
     </div>
   </div>
 </div>
@@ -3006,6 +3006,62 @@ const BASELINES_PADRAO = {
 };
 const CFG_PADRAO = {ini:'05:00', fim:'14:30', fimSex:'13:30', cafeIni:'08:30', cafeFim:'09:00', cafeTol:5, troca:3, anom:55, filaBaixa:70};
 
+/* ---- Mescla de estados (dois aparelhos podem bipar ao mesmo tempo) ----
+   Antes: quem salvasse por último apagava o do outro. Agora os dois se juntam. ---- */
+function _tomb(o){ o.removidos=o.removidos||{ciclos:[],ordens:[],pessoas:[]}; return o.removidos; }
+function registrarRemocao(tipo, ids){
+  const t=_tomb(S); const set=new Set(t[tipo]||[]);
+  (Array.isArray(ids)?ids:[ids]).forEach(i=>set.add(String(i)));
+  t[tipo]=[...set];
+}
+function mesclarListas(locais, remotos, chave, tomb){
+  const morto=new Set((tomb||[]).map(String));
+  const map=new Map();
+  const por=(x)=>String(x[chave]);
+  (locais||[]).forEach(x=>map.set(por(x), x));
+  (remotos||[]).forEach(x=>{
+    const k=por(x); const a=map.get(k);
+    if(!a){ map.set(k,x); return; }
+    if(a.fim && !x.fim) return;   // ciclo fechado ganha do aberto
+    map.set(k,x);
+  });
+  return [...map.values()].filter(x=>!morto.has(por(x)));
+}
+function mesclarEstado(remoto){
+  const t=_tomb(S), tr=remoto.removidos||{ciclos:[],ordens:[],pessoas:[]};
+  const tomb={
+    ciclos:[...new Set([...(t.ciclos||[]), ...(tr.ciclos||[])])],
+    ordens:[...new Set([...(t.ordens||[]), ...(tr.ordens||[])])],
+    pessoas:[...new Set([...(t.pessoas||[]), ...(tr.pessoas||[])])]
+  };
+  const novoCiclos =mesclarListas(S.ciclos,  remoto.ciclos,  'id',  tomb.ciclos);
+  const novoOrdens =mesclarListas(S.ordens,  remoto.ordens,  'num', tomb.ordens);
+  const novoPessoas=mesclarListas(S.pessoas, remoto.pessoas, 'id',  tomb.pessoas);
+  const euTinhaMais =
+    novoCiclos.length  > (remoto.ciclos||[]).length ||
+    novoOrdens.length  > (remoto.ordens||[]).length ||
+    novoPessoas.length > (remoto.pessoas||[]).length;
+  S=Object.assign(S, remoto);
+  S.ciclos=novoCiclos; S.ordens=novoOrdens; S.pessoas=novoPessoas; S.removidos=tomb;
+  return euTinhaMais;
+}
+/* ---- Ciclo esquecido aberto: fecha no fim da jornada do PRÓPRIO dia ---- */
+function fecharCiclosVelhos(){
+  const hoje=new Date(); hoje.setHours(0,0,0,0);
+  let n=0;
+  (S.ciclos||[]).forEach(c=>{
+    if(c.fim || c.importado) return;
+    const dia=new Date(c.ini); dia.setHours(0,0,0,0);
+    if(dia.getTime() < hoje.getTime()){
+      c.fim=tetoAberto(c.ini);
+      c.autoFechado=true;              // marcado pra você revisar em Alertas
+      (c.pausas||[]).forEach(p=>{ if(!p.fim) p.fim=c.fim; });
+      n++;
+    }
+  });
+  if(n){ salvarTudo(); }
+  return n;
+}
 function migrarOpsBase(){
   if(S.opsBaseRev >= 6) return;
   const extras=(S.opsBase||[]).filter(o=>o&&o.extra);
@@ -3058,11 +3114,12 @@ function ligarBanco(){
       const zeraOrdens=Array.isArray(d.ordens) && d.ordens.length===0 && Array.isArray(S.ordens) && S.ordens.length>0;
       if(zeraMarcas || zeraOrdens){ enviarParaNuvem(); return; }
       aplicandoRemoto=true;
-      S=Object.assign(S,d);
-      migrarOpsBase();   // a nuvem pode trazer a lista de operações antiga: migra de novo
+      const euTinhaMais = mesclarEstado(d);   // junta em vez de sobrescrever
+      migrarOpsBase();
       aplicandoRemoto=false;
       gravarLocal(JSON.stringify(S));
       renderTudo(); preencherCfg();
+      if(euTinhaMais) enviarParaNuvem();      // devolve o que a nuvem não tinha
     }catch(e){ aplicandoRemoto=false; }
   });
 }
@@ -3123,10 +3180,21 @@ const fmtData = ts => new Date(ts).toLocaleDateString('pt-BR');
 function horaDoDia(ts, hhmm){ const d=new Date(ts); const [h,m]=hhmm.split(':').map(Number); d.setHours(h,m,0,0); return d.getTime(); }
 function fimJornada(ts){ const dia=new Date(ts).getDay(); return horaDoDia(ts, dia===5? S.cfg.fimSex : S.cfg.fim); }
 function overlap(a1,a2,b1,b2){ return Math.max(0, Math.min(a2,b2)-Math.max(a1,b1)); }
+function tetoAberto(ini){
+  // até onde um ciclo AINDA ABERTO pode contar. Sem isso, um ciclo esquecido
+  // vira a noite e destrói a média da pessoa.
+  let teto=fimJornada(ini);
+  // se começou em hora extra (depois do fim da jornada), fimJornada fica ANTES do início:
+  // nesse caso o teto é 4h, que é muito mais do que um pacote leva.
+  if(teto <= ini + 30*60000) teto = ini + 4*3600000;
+  return teto;
+}
 function tempoUtil(c){
   // ciclo importado de planilha: as horas já vêm líquidas, não desconta nada
   if(c.importado) return Math.max((c.fim||Date.now())-c.ini, 60000);
-  let fim=c.fim||Date.now(); let ms=fim-c.ini;
+  let fim=c.fim||Date.now();
+  if(!c.fim) fim=Math.min(fim, tetoAberto(c.ini));   // aberto nao vira a noite
+  let ms=fim-c.ini;
   (c.pausas||[]).forEach(p=> ms -= ((p.fim||Date.now())-p.ini));
   const cIni=horaDoDia(c.ini,S.cfg.cafeIni), cFim=horaDoDia(c.ini,S.cfg.cafeFim)+(S.cfg.cafeTol*60000);
   ms -= overlap(c.ini,fim,cIni,cFim);
@@ -3295,6 +3363,19 @@ function proporCiclo(pessoaId, pk){
   if(!pessoa){ flash(false,'Crachá não reconhecido',''); return; }
   const {num,tam,nPac,qtd}=pk;
   const o=S.ordens.find(x=>x.num===num);
+  // TRAVA: a etiqueta tem que bater com o cadastro da OP.
+  // Sem isso, uma etiqueta velha (ou de OP apagada e recriada) cria produção fantasma.
+  if(o){
+    const _tam=o.tamanhos.find(x=>x.tam===tam);
+    if(!_tam){
+      flash(false,'Tamanho não existe nesta OP','A etiqueta diz "'+tam+'", mas a OP '+num+' tem: '+o.tamanhos.map(x=>x.tam).join(', ')+'. Etiqueta velha? Reimprima.');
+      limparPend(); return;
+    }
+    if(!_tam.pacotes.some(x=>String(x.n)===String(nPac))){
+      flash(false,'Pacote não existe nesta OP','A etiqueta diz pacote '+nPac+', mas '+tam+' tem os pacotes: '+_tam.pacotes.map(x=>x.n).join(', ')+'. Os pacotes foram alterados? Reimprima as etiquetas.');
+      limparPend(); return;
+    }
+  }
   // quantidade vem do cadastro do pacote (se existir), não do número impresso no QR.
   // assim, se o pacote foi dividido (ex: 74 -> 56 + 18), a mesma etiqueta passa a valer 56 sozinha.
   let qtdPac=Number(qtd);
@@ -3314,7 +3395,11 @@ function proporCiclo(pessoaId, pk){
     if(etapaIdx>=0){ const e=o.etapas[etapaIdx]; opKey=e.key; rotulo=e.rotulo; base=e.base; }
   } else {
     base=baseHint || (S.ciclos.filter(c=>c.pessoa===pessoaId).slice(-1)[0]||{}).op;
-    if(!base){ flash(false,'Falta a operação','Escolha a operação no seletor ou bipe o cartão'); return; }
+    if(!base){
+      if(!o) flash(false,'OP '+num+' não existe','Essa etiqueta é de uma OP que não está cadastrada (foi excluída?). Confira antes de bipar.');
+      else flash(false,'Falta a operação','Escolha a operação no seletor ou bipe o cartão');
+      return;
+    }
     opKey=base; rotulo=(S.opsBase.find(x=>x.id===base)||{}).nome||base;
   }
 
@@ -4327,6 +4412,7 @@ function gravarImportacao(todos, criadas){
 function desfazerImportacao(lote){
   const imp=(S.importacoes||[]).find(x=>x.lote===lote); if(!imp) return;
   if(!confirm('Desfazer esta importação?\n\n'+imp.pessoas+' · '+imp.qtd+' lançamentos · '+imp.pecas+' peças\n\nOs lançamentos bipados não são afetados.')) return;
+  registrarRemocao('ciclos', S.ciclos.filter(c=>c.impLote===lote).map(c=>c.id));
   S.ciclos=S.ciclos.filter(c=>c.impLote!==lote);
   S.importacoes=(S.importacoes||[]).filter(x=>x.lote!==lote);
   salvarTudo(); renderTudo();
@@ -4337,6 +4423,7 @@ function limparImportados(){
   const n=S.ciclos.filter(c=>c.importado).length;
   if(!n) return alert('Não há nada importado de planilha.');
   if(!confirm('Apagar os '+n+' lançamentos que vieram de planilha?\n\nOs registros bipados NÃO são afetados.\n\nO mapeamento das operações também será esquecido, pra você refazer na tela de conferência.')) return;
+  registrarRemocao('ciclos', S.ciclos.filter(c=>c.importado).map(c=>c.id));
   S.ciclos=S.ciclos.filter(c=>!c.importado);
   S.importacoes=[];
   S.mapaOps={};   // esquece o mapa antigo (que pode estar errado)
@@ -4573,7 +4660,7 @@ function renderOps(){
       '<button class="acao mini sec" onclick="editarSeqOP(\''+o.num+'\')">Editar sequência</button> '+
       '<button class="acao mini sec" onclick="editarPacotes(\''+o.num+'\')">Editar pacotes</button> '+
       '<button class="acao mini sec" onclick="lancarExterno(\''+o.num+'\')">Lançar feito fora</button> '+
-      '<button class="acao mini alerta" onclick="if(autorizado() && confirm(\'Excluir OP?\')){S.ordens=S.ordens.filter(x=>x.num!==\''+o.num+'\'); salvarTudo(); renderTudo();}">✕</button></span></div>'+
+      '<button class="acao mini alerta" onclick="excluirOP(\''+o.num+'\')">✕</button></span></div>'+
       '<div class="mini-info" style="margin:6px 0;">'+seq+'</div>'+
       (st.done? '' : '<div class="mini-info" style="margin:-2px 0 6px; color:var(--sub);">Carga desta OP: <b>'+st.horas+' h</b> de costura'+
         (st.horasFila>st.horas? ' · com as OPs na frente: <b>'+st.horasFila+' h</b>':'')+
@@ -4597,17 +4684,33 @@ function editarPacotes(num){
 }
 function renderPacotesEdit(){
   const o=S.ordens.find(x=>x.num===_pacOP); if(!o) return;
-  let html='<div class="mini-info" style="margin-bottom:10px;">OP <b>'+o.num+'</b>. Ajuste a quantidade de cada pacote, adicione ou remova. O total de cada tamanho é recalculado sozinho.<br>Pacote que <b>já foi bipado</b> aparece marcado: dá pra corrigir a quantidade, mas não dá pra apagar.</div>';
+  let html='<div class="mini-info" style="margin-bottom:10px;">OP <b>'+o.num+'</b>. O <b>total</b> de cada tamanho é o que veio na nota: os pacotes têm que <b>fechar exatamente com ele</b>.<br>Pacote que já foi bipado aparece marcado: dá pra corrigir a quantidade, mas não dá pra apagar.</div>';
+  let erroGeral=0;
   _pacTemp.forEach((t,ti)=>{
-    const total=t.pacotes.reduce((s,p)=>s+(Number(p.qtd)||0),0);
-    html+='<div style="border:1px solid #e0dcc8; border-radius:6px; padding:10px; margin-bottom:10px;">'+
-      '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:6px;">'+
+    const soma=t.pacotes.reduce((s,p)=>s+(Number(p.qtd)||0),0);
+    const alvo=Number(t.total)||0;
+    const dif=soma-alvo;
+    if(dif!==0) erroGeral++;
+    const cor = dif===0? '#4d7c2a' : '#b23b3b';
+    html+='<div style="border:1px solid '+(dif===0?'#e0dcc8':'#b23b3b')+'; border-radius:6px; padding:10px; margin-bottom:10px;'+(dif!==0?' background:#fdf2f1;':'')+'">'+
+      '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">'+
       '<b>'+(t.cor? t.cor+' · ':'')+(t.tamBase||t.tam)+(t.ton? ' · '+t.ton:'')+'</b>'+
-      '<span class="mini-info">total: <b id="pacTot-'+ti+'">'+total+'</b> pçs · '+t.pacotes.length+' pacote(s)</span></div>'+
-      '<div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">';
+      '<span style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">'+
+        '<span class="mini-info">total da OP</span>'+
+        '<input type="number" min="1" value="'+alvo+'" style="width:80px;" onchange="pacTotal('+ti+',this.value)">'+
+        '<span class="mini-info">soma dos pacotes: <b style="color:'+cor+';">'+soma+'</b></span>'+
+      '</span></div>';
+    if(dif!==0){
+      html+='<div style="color:#b23b3b; font-weight:700; font-size:13px; margin-bottom:8px;">'+
+        (dif>0? '⚠ Sobram '+dif+' peça(s): os pacotes somam MAIS que o total da OP.'
+              : '⚠ Faltam '+Math.abs(dif)+' peça(s): os pacotes somam MENOS que o total da OP.')+
+        ' <button class="acao mini" style="margin-left:6px;" onclick="pacAjustar('+ti+')">Acertar automaticamente</button>'+
+        '</div>';
+    }
+    html+='<div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">';
     t.pacotes.forEach((p,pi)=>{
       const bip=bipadoNoPacote(o.num, t.tam, p.n);
-      html+='<div style="display:flex; align-items:center; gap:4px; border:1px solid '+(bip?'#c7a581':'#ddd')+'; border-radius:5px; padding:5px 7px;'+(bip?' background:#fdf8f1;':'')+'">'+
+      html+='<div style="display:flex; align-items:center; gap:4px; border:1px solid '+(bip?'#c7a581':'#ddd')+'; border-radius:5px; padding:5px 7px; background:'+(bip?'#fdf8f1':'#fff')+';">'+
         '<span class="mini-info" style="min-width:42px;">Pac '+p.n+'</span>'+
         '<input type="number" min="1" value="'+p.qtd+'" style="width:64px;" onchange="pacQtd('+ti+','+pi+',this.value)">'+
         (bip? '<span title="ja bipado" style="color:#c7a581; font-weight:800;">&#9679;</span>'
@@ -4618,21 +4721,61 @@ function renderPacotesEdit(){
       '<button class="acao mini sec" onclick="pacRedividir('+ti+')">&#8635; Redividir</button>';
     html+='</div></div>';
   });
+  const totGeral=_pacTemp.reduce((s,t)=>s+(Number(t.total)||0),0);
+  const somaGeral=_pacTemp.reduce((s,t)=>s+t.pacotes.reduce((a,p)=>a+(Number(p.qtd)||0),0),0);
+  html+='<div style="border-top:2px solid #e0dcc8; padding-top:8px; display:flex; justify-content:space-between; font-weight:800;">'+
+    '<span>TOTAL DA OP</span><span style="color:'+(totGeral===somaGeral?'#4d7c2a':'#b23b3b')+';">'+somaGeral+' / '+totGeral+' pçs</span></div>';
+  const btn=document.getElementById('btnSalvarPac');
+  if(btn){ btn.disabled=erroGeral>0; btn.style.opacity=erroGeral>0?0.45:1; btn.textContent=erroGeral>0? '✕ Corrija os '+erroGeral+' tamanho(s) em vermelho' : '✓ Salvar pacotes'; }
   document.getElementById('pacCorpo').innerHTML=html;
+}
+function pacTotal(ti,v){
+  const q=Math.max(1, Math.floor(Number(v)||0));
+  _pacTemp[ti].total=q;
+  renderPacotesEdit();
+}
+function pacAjustar(ti){
+  const t=_pacTemp[ti];
+  const o=S.ordens.find(x=>x.num===_pacOP);
+  const alvo=Number(t.total)||0;
+  let soma=t.pacotes.reduce((s,p)=>s+(Number(p.qtd)||0),0);
+  let dif=alvo-soma;   // >0 falta, <0 sobra
+  // ajusta pelos pacotes NÃO bipados, do último para o primeiro
+  const livres=t.pacotes.map((p,i)=>({p,i})).filter(x=>!bipadoNoPacote(o.num,t.tam,x.p.n));
+  if(!livres.length) return alert('Todos os pacotes deste tamanho já foram bipados. Ajuste o total da OP em vez dos pacotes.');
+  for(let k=livres.length-1; k>=0 && dif!==0; k--){
+    const p=livres[k].p;
+    if(dif>0){ p.qtd+=dif; dif=0; }
+    else {
+      const podeTirar=Math.min(p.qtd-1, -dif);
+      p.qtd-=podeTirar; dif+=podeTirar;
+    }
+  }
+  // se ainda sobra, remove pacotes livres vazios do fim
+  while(dif<0){
+    const ultLivre=[...t.pacotes].reverse().find(p=>!bipadoNoPacote(o.num,t.tam,p.n));
+    if(!ultLivre || t.pacotes.length<=1) break;
+    if(ultLivre.qtd<= -dif){ dif+=ultLivre.qtd; t.pacotes=t.pacotes.filter(p=>p!==ultLivre); }
+    else break;
+  }
+  const novaSoma=t.pacotes.reduce((s,p)=>s+p.qtd,0);
+  if(novaSoma!==alvo) alert('Não consegui fechar exatamente (os pacotes bipados travam '+t.pacotes.filter(p=>bipadoNoPacote(o.num,t.tam,p.n)).reduce((s,p)=>s+p.qtd,0)+' peças). Ajuste na mão.');
+  renderPacotesEdit();
 }
 function pacQtd(ti,pi,v){
   const q=Math.max(1, Math.floor(Number(v)||0));
   _pacTemp[ti].pacotes[pi].qtd=q;
-  _pacTemp[ti].total=_pacTemp[ti].pacotes.reduce((s,p)=>s+(Number(p.qtd)||0),0);
-  const el=document.getElementById('pacTot-'+ti); if(el) el.textContent=_pacTemp[ti].total;
+  renderPacotesEdit();   // o total NÃO muda: ele é o teto da OP
 }
 function pacAdd(ti){
   const t=_pacTemp[ti];
   const nums=t.pacotes.map(p=>Number(String(p.n).replace(/\D/g,''))||0);
   const n=Math.max(0,...nums)+1;
+  const soma=t.pacotes.reduce((s,p)=>s+(Number(p.qtd)||0),0);
+  const sobra=(Number(t.total)||0)-soma;
+  if(sobra<=0) return alert('Os pacotes já somam o total da OP ('+t.total+' pçs).\n\nPra criar mais um pacote, primeiro tire peças de outro, ou aumente o total do tamanho.');
   const ult=t.pacotes[t.pacotes.length-1];
-  t.pacotes.push({n, qtd:(ult? ult.qtd : 70)});
-  t.total=t.pacotes.reduce((s,p)=>s+(Number(p.qtd)||0),0);
+  t.pacotes.push({n, qtd: Math.min(sobra, ult? ult.qtd : 70)});
   renderPacotesEdit();
 }
 function pacDel(ti,pi){
@@ -4642,7 +4785,6 @@ function pacDel(ti,pi){
   if(bipadoNoPacote(o.num, t.tam, p.n)) return alert('Este pacote ja foi bipado. Nao da pra apagar sem perder o registro.');
   if(t.pacotes.length<=1) return alert('O tamanho precisa de pelo menos um pacote.');
   t.pacotes.splice(pi,1);
-  t.total=t.pacotes.reduce((s,p)=>s+(Number(p.qtd)||0),0);
   renderPacotesEdit();
 }
 function pacRedividir(ti){
@@ -4650,18 +4792,27 @@ function pacRedividir(ti){
   const o=S.ordens.find(x=>x.num===_pacOP);
   const bipados=t.pacotes.filter(p=>bipadoNoPacote(o.num,t.tam,p.n)).length;
   if(bipados) return alert('Este tamanho ja tem '+bipados+' pacote(s) bipado(s). Redividir apagaria o rastro. Ajuste um a um.');
-  const tot=Number(prompt('Total de pecas deste tamanho:', t.total));
+  const tot=Number(prompt('Total de pecas deste tamanho (o que veio na nota):', t.total));
   if(!tot || tot<1) return;
   const por=Number(prompt('Pecas por pacote:', t.pacotes[0]? t.pacotes[0].qtd : 70));
   if(!por || por<1) return;
   const novos=[]; let resto=tot, n=1;
   while(resto>0){ const q=Math.min(por,resto); novos.push({n, qtd:q}); resto-=q; n++; }
   t.pacotes=novos;
-  t.total=novos.reduce((s,p)=>s+p.qtd,0);
+  t.total=tot;
   renderPacotesEdit();
 }
 function salvarPacotes(){
   const o=S.ordens.find(x=>x.num===_pacOP); if(!o) return;
+  // TRAVA: os pacotes têm que fechar com o total de cada tamanho
+  const erros=[];
+  _pacTemp.forEach(t=>{
+    const soma=t.pacotes.reduce((s,p)=>s+(Number(p.qtd)||0),0);
+    const alvo=Number(t.total)||0;
+    if(soma!==alvo) erros.push((t.cor? t.cor+' ':'')+(t.tamBase||t.tam)+': pacotes somam '+soma+', total da OP é '+alvo+' ('+(soma>alvo?'sobram '+(soma-alvo):'faltam '+(alvo-soma))+')');
+  });
+  if(erros.length) return alert('Não dá pra salvar: os pacotes não fecham com o total da OP.\n\n'+erros.join('\n')+'\n\nUse "Acertar automaticamente" ou ajuste na mão.');
+  // aviso: quantidade menor que o já bipado
   const avisos=[];
   _pacTemp.forEach(t=>t.pacotes.forEach(p=>{
     const cs=S.ciclos.filter(c=>c.ordem===o.num && String(c.tam)===String(t.tam) && String(c.pacote)===String(p.n) && c.fim);
@@ -4670,12 +4821,31 @@ function salvarPacotes(){
   }));
   if(avisos.length && !confirm('Atencao:\n\n'+avisos.join('\n')+'\n\nSalvar assim mesmo?')) return;
   o.tamanhos=JSON.parse(JSON.stringify(_pacTemp));
-  o.tamanhos.forEach(t=>{ t.total=t.pacotes.reduce((s,p)=>s+(Number(p.qtd)||0),0); });
   salvarTudo(); renderTudo(); ocultarModais();
   _pacOP=null; _pacTemp=null;
   alert('Pacotes salvos.\n\nSe mudou quantidades ou criou pacotes novos, reimprima as etiquetas desta OP.');
 }
 function cancelarPacotes(){ _pacOP=null; _pacTemp=null; ocultarModais(); }
+function excluirOP(num){
+  if(!autorizado()) return;
+  const o=S.ordens.find(x=>x.num===num); if(!o) return;
+  const cs=S.ciclos.filter(c=>c.ordem===num);
+  const pcs=cs.reduce((s,c)=>s+qtdEfetiva(c),0);
+  const ext=(o.externos||[]).reduce((s,e)=>s+(e.qtd||0),0);
+  if(cs.length || ext){
+    const quem=[...new Set(cs.map(c=>(S.pessoas.find(p=>p.id===c.pessoa)||{}).nome||c.pessoa))];
+    if(!confirm('ATENÇÃO: a OP '+num+' JÁ TEM PRODUÇÃO.\n\n'+
+      '· '+cs.length+' bipagem(ns), '+pcs+' peças\n'+
+      (ext? '· '+ext+' peças lançadas como feitas fora\n':'')+
+      (quem.length? '· quem trabalhou nela: '+quem.join(', ')+'\n':'')+
+      '\nSe você excluir, a OP some das telas, mas essas bipagens ficam no histórico SEM a OP, e as costureiras continuam com essas peças na média delas.\n\n'+
+      'Tem certeza que quer excluir?')) return;
+  } else {
+    if(!confirm('Excluir a OP '+num+'? (ela ainda não tem nenhuma produção)')) return;
+  }
+  S.ordens=S.ordens.filter(x=>x.num!==num);
+  salvarTudo(); renderTudo();
+}
 function editarSeqOP(num){
   const o=S.ordens.find(x=>x.num===num); if(!o) return;
   if(!autorizado()) return;
@@ -5529,7 +5699,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.27.0';
+const VERSAO = '3.28.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -5573,6 +5743,9 @@ function baixarDiagnostico(){
 }
 setInterval(()=>verificarAtualizacao(false), 30*60000);
 setTimeout(()=>verificarAtualizacao(false), 5000);
+// ciclo esquecido aberto de um dia anterior destrói a média da pessoa: fecha no fim da jornada daquele dia
+setTimeout(()=>fecharCiclosVelhos(), 2000);
+setInterval(()=>fecharCiclosVelhos(), 10*60000);
 
 function modoTV(on){
   document.body.classList.toggle('tv', on);
@@ -5614,7 +5787,7 @@ document.querySelectorAll('nav button').forEach(b=>{
     renderTudo();
   });
 });
-function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); renderImportacoes(); }
+function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); renderImportacoes(); if(perfilAtivo==='costureira') renderMinha(); }
 /* atalhos: Enter confirma, Esc cancela nos modais */
 document.addEventListener('keydown', e=>{
   const conf=document.getElementById('confModal'), lac=document.getElementById('lacModal');
@@ -5626,7 +5799,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
