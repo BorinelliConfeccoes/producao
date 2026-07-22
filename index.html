@@ -4469,44 +4469,47 @@ function renderCronoHist(){
   const box=document.getElementById('cronoHist'); if(!box) return;
   const imp=S.ciclos.filter(c=>c.importado && c.fim);
   if(!imp.length){ box.innerHTML='<div class="mini-info" style="margin-top:12px;">Nenhum histórico importado ainda.</div>'; return; }
-  // por mês: cada linha importada é uma OPERAÇÃO feita, não uma camiseta.
-  // camisetas ≈ operações da família mais frequente do mês (toda camiseta passa uma vez por cada).
+  // cada linha da planilha é uma OPERAÇÃO. Não dá pra saber "camisetas" a partir de
+  // planilhas por pessoa (cada pessoa faz só algumas operações). Então mostramos a verdade:
+  // quanto de cada operação foi feito, por mês.
   const porMes={};
+  const opsTotais={};
   imp.forEach(c=>{
     const d=new Date(c.ini);
     const k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
-    if(!porMes[k]) porMes[k]={ops:0, ms:0, pessoas:new Set(), porFam:{}};
+    if(!porMes[k]) porMes[k]={ops:0, pessoas:new Set(), porOp:{}};
     const m=porMes[k];
-    m.ops+=qtdEfetiva(c); m.ms+=tempoUtil(c); m.pessoas.add(c.pessoa);
+    const q=qtdEfetiva(c);
     const base=(c.opKey||c.op||'').split('|')[0];
-    m.porFam[base]=(m.porFam[base]||0)+qtdEfetiva(c);
+    const rot=c.rotulo||base;
+    m.ops+=q; m.pessoas.add(c.pessoa);
+    m.porOp[rot]=(m.porOp[rot]||0)+q;
+    opsTotais[rot]=(opsTotais[rot]||0)+q;
   });
   const meses=Object.keys(porMes).sort();
-  // estimativa de camisetas = operações do mês ÷ nº de etapas por camiseta.
-  // usa a sequência da marca com mais etapas como referência (quantas operações uma camiseta leva).
-  const etapasPorCamiseta=Math.max(9, ...(S.marcas||[]).map(m=>(m.etapas||[]).length));
-  meses.forEach(k=>{ const m=porMes[k]; m.camisetas=Math.round(m.ops/etapasPorCamiseta); });
-  const maxCam=Math.max(...meses.map(k=>porMes[k].camisetas),1);
+  const maxOps=Math.max(...meses.map(k=>porMes[k].ops),1);
   const totOps=imp.reduce((s,c)=>s+qtdEfetiva(c),0);
-  const totCam=meses.reduce((s,k)=>s+porMes[k].camisetas,0);
+  const primeiro=meses[0], ultimo=meses[meses.length-1];
+  const fmtMes=(k)=>{ const [y,mo]=k.split('-'); return new Date(y,mo-1,1).toLocaleDateString('pt-BR',{month:'short', year:'numeric'}); };
 
   let html='<div style="margin-top:14px; border-top:1px solid #e0dcc8; padding-top:10px;">'+
-    '<b>Cronologia importada</b> <span class="mini-info">('+meses.length+' meses)</span>'+
-    '<div style="display:flex; gap:24px; flex-wrap:wrap; margin:8px 0 12px;">'+
-      '<div><div class="mini-info">CAMISETAS (estimado)</div><div style="font-size:1.5rem; font-weight:800;">'+totCam.toLocaleString('pt-BR')+'</div></div>'+
-      '<div><div class="mini-info">OPERAÇÕES FEITAS (trabalho)</div><div style="font-size:1.5rem; font-weight:800;">'+totOps.toLocaleString('pt-BR')+'</div></div>'+
-    '</div>'+
-    '<div class="mini-info" style="margin-bottom:8px;">Cada linha da planilha é uma <b>operação</b> (um ombro, uma gola...). Uma camiseta passa por várias, então a soma de operações é bem maior que o número de camisetas. A estimativa de camisetas divide as operações pelo número de etapas de uma camiseta.</div>';
+    '<b>Cronologia importada</b> <span class="mini-info">('+meses.length+' meses · de '+fmtMes(primeiro)+' a '+fmtMes(ultimo)+')</span>'+
+    '<div class="mini-info" style="margin:8px 0;">Cada barra é o total de <b>operações feitas</b> no mês (um ombro, uma bainha, uma lateral... cada um conta 1). Como cada pessoa faz só algumas operações, isso <b>não é</b> o número de camisetas — é o volume de trabalho.</div>';
   meses.forEach(k=>{
     const m=porMes[k];
-    const [y,mo]=k.split('-');
-    const nome=new Date(y,mo-1,1).toLocaleDateString('pt-BR',{month:'short', year:'numeric'});
-    const larg=Math.max(3,(m.camisetas/maxCam)*100);
+    const larg=Math.max(3,(m.ops/maxOps)*100);
     html+='<div style="display:flex; align-items:center; gap:8px; padding:3px 0;">'+
-      '<span style="min-width:95px; font-size:13px;">'+nome+'</span>'+
+      '<span style="min-width:95px; font-size:13px;">'+fmtMes(k)+'</span>'+
       '<div style="flex:1; background:#eef0e6; border-radius:3px; overflow:hidden;"><div style="width:'+larg+'%; background:#3d4d32; height:16px;"></div></div>'+
-      '<span class="mini-info" style="min-width:230px; text-align:right;">~'+m.camisetas.toLocaleString('pt-BR')+' camisetas · '+m.ops.toLocaleString('pt-BR')+' operações · '+m.pessoas.size+' pessoa(s)</span></div>';
+      '<span class="mini-info" style="min-width:190px; text-align:right;">'+m.ops.toLocaleString('pt-BR')+' operações · '+m.pessoas.size+' pessoa(s)</span></div>';
   });
+  // total por operação no período todo
+  const ordOps=Object.entries(opsTotais).sort((a,b)=>b[1]-a[1]);
+  html+='<div style="margin-top:12px;"><b class="mini-info">TOTAL POR OPERAÇÃO (todo o período)</b>'+
+    '<table style="margin-top:4px;"><tr><th>Operação</th><th>Feitas</th></tr>'+
+    ordOps.map(([op,q])=>'<tr><td>'+op+'</td><td><b>'+q.toLocaleString('pt-BR')+'</b></td></tr>').join('')+
+    '</table></div>';
+  html+='<div class="mini-info" style="margin-top:8px;">Total geral: '+totOps.toLocaleString('pt-BR')+' operações. Pra saber quantas <b>camisetas</b> saíram, o certo é olhar uma operação que toda camiseta passa uma vez (a Revisão) — não somar tudo.</div>';
   html+='</div>';
   box.innerHTML=html;
 }
@@ -5973,7 +5976,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.30.1';
+const VERSAO = '3.30.2';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
