@@ -2591,13 +2591,38 @@ nav button.oculto{display:none;}
 <!-- ============ RELATÓRIOS ============ -->
 <section class="tela" id="t-relat">
   <div class="subtabs" data-grupo="relat">
-    <button data-s="individual" class="on">👤 Individual</button>
+    <button data-s="diadia" class="on">📅 Resumo do dia</button>
+    <button data-s="meta">🎯 Meta / Gargalos</button>
+    <button data-s="individual">👤 Individual</button>
     <button data-s="envio">💬 Média do dia</button>
     <button data-s="comparativo">⚖️ Comparativo</button>
     <button data-s="calibra">🎯 Calibração</button>
     <button data-s="ocorr">🧩 Ocorrências</button>
   </div>
-  <div class="sub on" id="sub-relat-individual">
+  <div class="sub on" id="sub-relat-diadia">
+    <div class="linhaform">
+      <div><label>Dia</label><input type="date" id="ddDia" onchange="renderDiaDia()"></div>
+      <button class="acao sec" onclick="ddHoje()">Hoje</button>
+      <button class="acao sec" onclick="ddOntem()">Ontem</button>
+    </div>
+    <div id="diadiaOut"></div>
+  </div>
+  <div class="sub" id="sub-relat-meta">
+    <div class="card">
+      <div class="linhaform" style="align-items:flex-end;">
+        <div><label>Meta de camisetas prontas por dia</label><input type="number" id="metaDia" value="2500" style="width:120px;" onchange="renderMeta()"></div>
+        <div><label>Olhar os últimos</label><select id="metaJanela" onchange="renderMeta()">
+          <option value="7">7 dias</option>
+          <option value="30" selected>30 dias</option>
+          <option value="90">90 dias</option>
+          <option value="9999">todo o histórico</option>
+        </select></div>
+      </div>
+      <div class="mini-info">O sistema olha o melhor ritmo que cada operação já sustentou e calcula quantas pessoas seriam necessárias pra ela entregar a meta por dia. A operação que mais precisa é o seu gargalo.</div>
+    </div>
+    <div id="metaOut"></div>
+  </div>
+  <div class="sub" id="sub-relat-individual">
     <div class="linhaform">
       <div><label>Pessoa</label><select id="rPessoa"></select></div>
       <div><label>Período</label><select id="rDias"><option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="60">60 dias</option><option value="9999">Tudo</option></select></div>
@@ -2719,6 +2744,7 @@ nav button.oculto{display:none;}
     <button data-s="operacoes">🧵 Operações</button>
     <button data-s="impressao">🖨 Impressão</button>
     <button data-s="sistema">🛠 Sistema</button>
+    <button data-s="historico">📚 Alimentar histórico</button>
   </div>
   <div class="sub" id="sub-aj-sistema">
   <div class="card">
@@ -2764,6 +2790,15 @@ nav button.oculto{display:none;}
       <button class="acao sec" onclick="imprimirAcessos()">🖨 Imprimir os acessos pra entregar</button>
     </div>
   </div>
+  </div>
+  <div class="sub" id="sub-aj-historico">
+    <div class="card">
+      <h2 style="margin-top:0;">Alimentar histórico antigo</h2>
+      <div class="mini-info" style="margin-bottom:10px;">Suba as planilhas de produção dos meses e anos anteriores, uma pessoa por vez. O sistema lê as datas de cada planilha e monta a cronologia, mesmo que sejam de 2023, 2024. Quanto mais dado, melhor o painel de Meta / Gargalos fica. O que já foi importado não duplica.</div>
+      <button class="acao" onclick="importarPlanilhaClick()">📊 Importar planilhas antigas</button>
+      <button class="acao sec alerta" onclick="limparImportados()" style="margin-left:8px;">🗑 Apagar tudo que veio de planilha</button>
+      <div id="cronoHist"></div>
+    </div>
   </div>
   <div class="sub on" id="sub-aj-regras">
   <div class="card">
@@ -4430,6 +4465,36 @@ function limparImportados(){
   salvarTudo(); renderTudo();
   alert(n+' lançamentos removidos.\n\nAgora importe as planilhas de novo. Na tela de conferência, veja se cada operação está indo pro lugar certo.');
 }
+function renderCronoHist(){
+  const box=document.getElementById('cronoHist'); if(!box) return;
+  const imp=S.ciclos.filter(c=>c.importado && c.fim);
+  if(!imp.length){ box.innerHTML='<div class="mini-info" style="margin-top:12px;">Nenhum histórico importado ainda.</div>'; return; }
+  const porMes={};
+  imp.forEach(c=>{
+    const d=new Date(c.ini);
+    const k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    if(!porMes[k]) porMes[k]={pcs:0, ms:0, pessoas:new Set(), lanc:0};
+    porMes[k].pcs+=qtdEfetiva(c); porMes[k].ms+=tempoUtil(c);
+    porMes[k].pessoas.add(c.pessoa); porMes[k].lanc++;
+  });
+  const meses=Object.keys(porMes).sort();
+  const maxPcs=Math.max(...meses.map(k=>porMes[k].pcs));
+  const totalPcs=imp.reduce((s,c)=>s+qtdEfetiva(c),0);
+  let html='<div style="margin-top:14px; border-top:1px solid #e0dcc8; padding-top:10px;">'+
+    '<b>Cronologia importada</b> <span class="mini-info">('+meses.length+' meses · '+totalPcs+' peças no total)</span>';
+  meses.forEach(k=>{
+    const m=porMes[k];
+    const [y,mo]=k.split('-');
+    const nome=new Date(y,mo-1,1).toLocaleDateString('pt-BR',{month:'short', year:'numeric'});
+    const larg=Math.max(3,(m.pcs/maxPcs)*100);
+    html+='<div style="display:flex; align-items:center; gap:8px; padding:3px 0;">'+
+      '<span style="min-width:90px; font-size:13px;">'+nome+'</span>'+
+      '<div style="flex:1; background:#eef0e6; border-radius:3px; overflow:hidden;"><div style="width:'+larg+'%; background:#3d4d32; height:16px;"></div></div>'+
+      '<span class="mini-info" style="min-width:150px; text-align:right;">'+m.pcs+' pçs · '+m.pessoas.size+' pessoa(s)</span></div>';
+  });
+  html+='</div>';
+  box.innerHTML=html;
+}
 function renderImportacoes(){
   const box=document.getElementById('mapaOpsBox'); if(!box) return;
   const lst=(S.importacoes||[]).slice().reverse();
@@ -5384,6 +5449,200 @@ function aplicarTodasSugestoes(){
   salvarTudo(); renderTudo();
   alert(pend.length+' metas definidas.');
 }
+/* ---- Resumo do dia: quanto saiu de cada operação, melhor e pior ---- */
+const FAMILIAS=[
+  {teste:id=>/^LATERAL/.test(id), nome:'Laterais (todas)'},
+  {teste:id=>/^BAINHA/.test(id), nome:'Bainhas (todas)'},
+  {teste:id=>/^OMBRO/.test(id), nome:'Ombros (todos)'},
+  {teste:id=>/^GOLA/.test(id), nome:'Golas (todas)'},
+  {teste:id=>/^REFORCO/.test(id), nome:'Reforços (todos)'}
+];
+function familiaDe(opId){ const f=FAMILIAS.find(x=>x.teste(opId)); return f? f.nome : null; }
+function ddSet(iso){ const el=document.getElementById('ddDia'); if(el){ el.value=iso; } renderDiaDia(); }
+function ddHoje(){ ddSet(new Date().toISOString().slice(0,10)); }
+function ddOntem(){ const d=new Date(); d.setDate(d.getDate()-1); ddSet(d.toISOString().slice(0,10)); }
+/* ---- Painel de Meta / Gargalos ----
+   Uma camiseta passa por várias operações em sequência. Pra fazer N camisetas/dia,
+   CADA operação precisa entregar N/dia. A que precisa de mais gente é o gargalo. ---- */
+// as 9 operações "canônicas" de uma camiseta (uma por família), na ordem
+const OPS_CAMISETA=[
+  {fam:'Ombro',    testa:id=>/^OMBRO/.test(id)},
+  {fam:'Gola',     testa:id=>/^GOLA/.test(id)},
+  {fam:'Etiqueta', testa:id=>id==='ETIQUETA'},
+  {fam:'Reforço',  testa:id=>/^REFORCO/.test(id)},
+  {fam:'Manga',    testa:id=>id==='MANGA'},
+  {fam:'Lateral',  testa:id=>/^LATERAL/.test(id)},
+  {fam:'Bainha manga', testa:id=>id==='BAINHAMANGA'},
+  {fam:'Bainha barra', testa:id=>id==='BAINHABARRA'},
+  {fam:'Revisão',  testa:id=>id==='REVISAO'}
+];
+function ritmoSustentadoFamilia(testa, desde){
+  // melhor ritmo/hora que a família sustentou por dia (percentil 75 dos dias-pessoa)
+  const porDia={};
+  S.ciclos.forEach(c=>{
+    if(!c.fim || c.flag) return;
+    if(c.ini<desde) return;
+    const base=(c.opKey||c.op||'').split('|')[0];
+    if(!testa(base)) return;
+    const k=c.pessoa+'|'+new Date(c.ini).toDateString();
+    if(!porDia[k]) porDia[k]={pcs:0, ms:0};
+    porDia[k].pcs+=qtdEfetiva(c); porDia[k].ms+=tempoUtil(c);
+  });
+  const rates=[];
+  let totPcs=0, totMs=0, diasPessoa=0;
+  Object.values(porDia).forEach(d=>{
+    const h=d.ms/3600000;
+    totPcs+=d.pcs; totMs+=d.ms;
+    if(h>=1){ rates.push(d.pcs/h); diasPessoa++; }
+  });
+  rates.sort((a,b)=>a-b);
+  const p75=rates.length? rates[Math.min(rates.length-1, Math.floor(rates.length*0.75))] : 0;
+  const medio=totMs? totPcs/(totMs/3600000) : 0;
+  return {ritmo:p75, medio, diasPessoa, totPcs};
+}
+function renderMeta(){
+  const box=document.getElementById('metaOut'); if(!box) return;
+  const meta=Number((document.getElementById('metaDia')||{}).value)||2500;
+  const jan=Number((document.getElementById('metaJanela')||{}).value)||30;
+  const desde=jan>=9999? 0 : Date.now()-jan*86400000;
+  const horasDia=horasUteisDia();
+  const pessoasHoje=Math.max(1,(S.pessoas||[]).length);
+
+  const linhas=OPS_CAMISETA.map(op=>{
+    const r=ritmoSustentadoFamilia(op.testa, desde);
+    // peças/dia que UMA pessoa entrega nessa operação
+    const porPessoaDia=r.ritmo*horasDia;
+    // quantas pessoas seriam necessárias pra fazer a meta nessa operação
+    const pessoasNec=porPessoaDia>0? meta/porPessoaDia : null;
+    return {...op, ritmo:r.ritmo, porPessoaDia, pessoasNec, diasPessoa:r.diasPessoa, temDado:r.diasPessoa>0};
+  });
+
+  const comDado=linhas.filter(l=>l.temDado);
+  const totalPessoasNec=comDado.reduce((s,l)=>s+(l.pessoasNec||0),0);
+
+  // cabeçalho: dá pra bater a meta com o time atual?
+  let html='<div class="card">';
+  if(comDado.length<OPS_CAMISETA.length){
+    const faltam=OPS_CAMISETA.filter(o=>!comDado.some(c=>c.fam===o.fam)).map(o=>o.fam);
+    html+='<div style="background:#fdf6e9; border-left:4px solid #c7a581; padding:8px 10px; border-radius:4px; margin-bottom:10px; font-size:13px;">'+
+      '<b>Ainda faltam dados de:</b> '+faltam.join(', ')+'. Alimente mais planilhas dessas operações pra conta ficar completa.</div>';
+  }
+  html+='<h3 style="margin-top:0;">Pra fazer '+meta+' camisetas por dia</h3>'+
+    '<div style="display:flex; gap:24px; flex-wrap:wrap;">'+
+    '<div><div class="mini-info">PESSOAS NECESSÁRIAS (todas as operações)</div><div style="font-size:1.9rem; font-weight:800;">'+Math.ceil(totalPessoasNec)+'</div></div>'+
+    '<div><div class="mini-info">VOCÊ TEM HOJE</div><div style="font-size:1.9rem; font-weight:800;">'+pessoasHoje+'</div></div>'+
+    '</div>';
+  if(totalPessoasNec>pessoasHoje){
+    html+='<div style="margin-top:8px; color:#b23b3b; font-weight:700;">Faltam ~'+Math.ceil(totalPessoasNec-pessoasHoje)+' pessoa(s)/dia de capacidade pra bater a meta com o ritmo de hoje — ou operações precisam ficar mais rápidas.</div>';
+  } else if(comDado.length===OPS_CAMISETA.length){
+    html+='<div style="margin-top:8px; color:#4d7c2a; font-weight:700;">Com o ritmo de hoje, o time atual dá conta da meta se estiver bem distribuído.</div>';
+  }
+  html+='</div>';
+
+  // tabela por operação, ordenada pelo gargalo (quem precisa de mais gente primeiro)
+  const ordenada=[...comDado].sort((a,b)=>(b.pessoasNec||0)-(a.pessoasNec||0));
+  html+='<div class="card"><h3 style="margin-top:0;">Operação por operação</h3>'+
+    '<div class="mini-info" style="margin-bottom:6px;">Ordenado pelo gargalo: quem precisa de mais gente pra fazer '+meta+'/dia aparece no topo.</div>'+
+    '<table><tr><th>Operação</th><th>Ritmo sustentado</th><th>1 pessoa faz/dia</th><th>Pessoas p/ '+meta+'</th></tr>';
+  ordenada.forEach((l,i)=>{
+    const gargalo=i===0;
+    html+='<tr'+(gargalo?' style="background:#fdf2f1;"':'')+'>'+
+      '<td><b>'+l.fam+'</b>'+(gargalo?' <span style="color:#b23b3b; font-weight:800;">← GARGALO</span>':'')+'</td>'+
+      '<td>'+Math.round(l.ritmo)+' pçs/h</td>'+
+      '<td>'+Math.round(l.porPessoaDia)+' pçs</td>'+
+      '<td><b>'+(l.pessoasNec? l.pessoasNec.toFixed(1) : '—')+'</b></td></tr>';
+  });
+  html+='</table></div>';
+
+  box.innerHTML=html;
+}
+function renderDiaDia(){
+  const box=document.getElementById('diadiaOut'); if(!box) return;
+  const el=document.getElementById('ddDia');
+  if(el && !el.value){ el.value=new Date().toISOString().slice(0,10); }
+  const iso=el? el.value : new Date().toISOString().slice(0,10);
+  const alvo=new Date(iso+'T00:00:00').toDateString();
+  const doDia=S.ciclos.filter(c=>c.fim && !c.flag && new Date(c.ini).toDateString()===alvo);
+  if(!doDia.length){ box.innerHTML='<div class="card mini-info">Nenhuma produção registrada neste dia.</div>'; return; }
+  const porOp={};
+  doDia.forEach(c=>{
+    const base=(c.opKey||c.op||'').split('|')[0];
+    if(!porOp[base]) porOp[base]={rotulo:c.rotulo||base, pcs:0, ms:0, fam:familiaDe(base)};
+    porOp[base].pcs+=qtdEfetiva(c); porOp[base].ms+=tempoUtil(c);
+  });
+  const porFam={};
+  Object.entries(porOp).forEach(([base,g])=>{
+    if(!g.fam) return;
+    if(!porFam[g.fam]) porFam[g.fam]={pcs:0, ms:0, itens:[]};
+    porFam[g.fam].pcs+=g.pcs; porFam[g.fam].ms+=g.ms; porFam[g.fam].itens.push(g);
+  });
+  const totalPcs=doDia.reduce((s,c)=>s+qtdEfetiva(c),0);
+  const totalMs=doDia.reduce((s,c)=>s+tempoUtil(c),0);
+  const pessoasDoDia=new Set(doDia.map(c=>c.pessoa)).size;
+  let html='<div class="card"><h2 style="margin-top:0;">'+new Date(iso+'T00:00:00').toLocaleDateString('pt-BR',{weekday:'long', day:'2-digit', month:'2-digit'})+'</h2>'+
+    '<div style="display:flex; gap:24px; flex-wrap:wrap; margin-top:6px;">'+
+    '<div><div class="mini-info">PEÇAS NO DIA</div><div style="font-size:1.9rem; font-weight:800;">'+totalPcs+'</div></div>'+
+    '<div><div class="mini-info">HORAS</div><div style="font-size:1.9rem; font-weight:800;">'+fmtH(totalMs)+'</div></div>'+
+    '<div><div class="mini-info">PESSOAS</div><div style="font-size:1.9rem; font-weight:800;">'+pessoasDoDia+'</div></div>'+
+    '<div><div class="mini-info">MÉDIA GERAL</div><div style="font-size:1.9rem; font-weight:800;">'+Math.round(totalPcs/(totalMs/3600000))+' <span style="font-size:.9rem;">pçs/h</span></div></div>'+
+    '</div></div>';
+  const linhas=[];
+  Object.entries(porFam).forEach(([nome,f])=>{
+    const media=Math.round(f.pcs/(f.ms/3600000));
+    let sub='';
+    if(f.itens.length>1){
+      sub='<div class="mini-info" style="margin-top:3px;">'+f.itens.sort((a,b)=>b.pcs-a.pcs).map(i=>i.rotulo+': '+i.pcs).join(' · ')+'</div>';
+    }
+    linhas.push({pcs:f.pcs, html:'<tr><td><b>'+nome+'</b>'+sub+'</td><td style="font-size:1.15rem;"><b>'+f.pcs+'</b> pçs</td><td>'+media+' pçs/h</td></tr>'});
+  });
+  Object.entries(porOp).forEach(([base,g])=>{
+    if(g.fam) return;
+    const media=Math.round(g.pcs/(g.ms/3600000));
+    linhas.push({pcs:g.pcs, html:'<tr><td><b>'+g.rotulo+'</b></td><td style="font-size:1.15rem;"><b>'+g.pcs+'</b> pçs</td><td>'+media+' pçs/h</td></tr>'});
+  });
+  linhas.sort((a,b)=>b.pcs-a.pcs);
+  html+='<div class="card"><h3 style="margin-top:0;">Quanto saiu de cada operação</h3>'+
+    '<table><tr><th>Operação</th><th>Peças</th><th>Ritmo</th></tr>'+linhas.map(l=>l.html).join('')+'</table></div>';
+  const desemp=[];
+  const porPessoaOp={};
+  doDia.forEach(c=>{
+    const base=(c.opKey||c.op||'').split('|')[0];
+    const k=c.pessoa+'|'+base;
+    if(!porPessoaOp[k]) porPessoaOp[k]={pessoa:c.pessoa, base, rotulo:c.rotulo||base, pcs:0, ms:0};
+    porPessoaOp[k].pcs+=qtdEfetiva(c); porPessoaOp[k].ms+=tempoUtil(c);
+  });
+  Object.values(porPessoaOp).forEach(x=>{
+    const h=x.ms/3600000;
+    if(h<0.5) return;
+    const nome=(S.pessoas.find(p=>p.id===x.pessoa)||{}).nome||x.pessoa;
+    desemp.push({nome, rotulo:x.rotulo, base:x.base, media:x.pcs/h, pcs:x.pcs});
+  });
+  if(desemp.length){
+    desemp.sort((a,b)=>b.media-a.media);
+    const top=desemp[0], pior=desemp[desemp.length-1];
+    const faixaTxt=(d)=>faixaDe(d.base, d.media).tx;
+    html+='<div class="card"><h3 style="margin-top:0;">Melhor e pior do dia</h3>'+
+      '<div style="display:flex; gap:14px; flex-wrap:wrap;">'+
+      '<div style="flex:1; min-width:220px; border:1px solid #cfe0c0; background:#f2f8ec; border-radius:8px; padding:12px;">'+
+        '<div style="font-size:1.4rem;">🥇 <b>'+top.nome+'</b></div>'+
+        '<div class="mini-info">'+top.rotulo+'</div>'+
+        '<div style="font-size:1.5rem; font-weight:800; margin-top:4px;">'+Math.round(top.media)+' pçs/h</div>'+
+        '<div class="mini-info">'+top.pcs+' peças · '+faixaTxt(top)+'</div></div>';
+    if(desemp.length>1){
+      html+='<div style="flex:1; min-width:220px; border:1px solid #e6cccc; background:#fbf3f3; border-radius:8px; padding:12px;">'+
+        '<div style="font-size:1.4rem;">🐢 <b>'+pior.nome+'</b></div>'+
+        '<div class="mini-info">'+pior.rotulo+'</div>'+
+        '<div style="font-size:1.5rem; font-weight:800; margin-top:4px;">'+Math.round(pior.media)+' pçs/h</div>'+
+        '<div class="mini-info">'+pior.pcs+' peças · '+faixaTxt(pior)+'</div></div>';
+    }
+    html+='</div>';
+    html+='<details style="margin-top:10px;"><summary class="mini-info" style="cursor:pointer;">ver todos ('+desemp.length+')</summary>'+
+      '<table style="margin-top:6px;"><tr><th>#</th><th>Pessoa</th><th>Operação</th><th>Ritmo</th><th>Peças</th></tr>'+
+      desemp.map((d,i)=>'<tr><td>'+(i+1)+'</td><td>'+d.nome+'</td><td>'+d.rotulo+'</td><td><b>'+Math.round(d.media)+'</b> pçs/h</td><td>'+d.pcs+'</td></tr>').join('')+
+      '</table></details></div>';
+  }
+  box.innerHTML=html;
+}
 function renderCalibra(){
   const semMeta=S.opsBase.filter(o=>!o.metas || !o.metas[0]);
   const comDados=semMeta.map(o=>({op:o, d:dadosOp(o.id), sug:metasSugeridas(o.id)})).filter(x=>x.d.horas>0);
@@ -5699,7 +5958,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.28.0';
+const VERSAO = '3.30.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -5773,6 +6032,9 @@ document.querySelectorAll('.subtabs').forEach(grupo=>{
       if(alvo) alvo.classList.add('on');
       const alvo2=document.getElementById('sub-'+g+'-'+btn.dataset.s+'2');
       if(alvo2) alvo2.classList.add('on');
+      if(btn.dataset.s==='diadia') renderDiaDia();
+      if(btn.dataset.s==='meta') renderMeta();
+      if(btn.dataset.s==='calibra') renderCalibra();
     });
   });
 });
@@ -5787,7 +6049,7 @@ document.querySelectorAll('nav button').forEach(b=>{
     renderTudo();
   });
 });
-function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); renderImportacoes(); if(perfilAtivo==='costureira') renderMinha(); }
+function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); renderImportacoes(); renderCronoHist(); if(perfilAtivo==='costureira') renderMinha(); if(document.querySelector('#sub-relat-diadia.on')) renderDiaDia(); }
 /* atalhos: Enter confirma, Esc cancela nos modais */
 document.addEventListener('keydown', e=>{
   const conf=document.getElementById('confModal'), lac=document.getElementById('lacModal');
@@ -5799,7 +6061,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
