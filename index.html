@@ -2592,12 +2592,32 @@ nav button.oculto{display:none;}
 <section class="tela" id="t-relat">
   <div class="subtabs" data-grupo="relat">
     <button data-s="diadia" class="on">📅 Resumo do dia</button>
+    <button data-s="comparardias">📈 Comparar dias</button>
+    <button data-s="mesames">🗓 Mês a mês</button>
     <button data-s="meta">🎯 Meta / Gargalos</button>
     <button data-s="individual">👤 Individual</button>
     <button data-s="envio">💬 Média do dia</button>
     <button data-s="comparativo">⚖️ Comparativo</button>
     <button data-s="calibra">🎯 Calibração</button>
     <button data-s="ocorr">🧩 Ocorrências</button>
+  </div>
+  <div class="sub" id="sub-relat-mesames">
+    <div class="card">
+      <div class="mini-info">Cada mês mostra o que o sistema <b>calculou</b> a partir das planilhas, e um campo pra você pôr quantas camisetas <b>realmente saíram</b> (da expedição/nota). O sistema compara os dois e aprende o quanto erra, pra ir acertando a estimativa.</div>
+    </div>
+    <div id="mesamesOut"></div>
+  </div>
+  <div class="sub" id="sub-relat-comparardias">
+    <div class="card">
+      <div class="linhaform">
+        <div><label>De</label><input type="date" id="cmpDe" onchange="renderCompararDias()"></div>
+        <div><label>Até</label><input type="date" id="cmpAte" onchange="renderCompararDias()"></div>
+        <button class="acao sec" onclick="cmpUltimos(7)">Últimos 7 dias</button>
+        <button class="acao sec" onclick="cmpUltimos(30)">Últimos 30 dias</button>
+      </div>
+      <div class="mini-info">Veja dia a dia quanto saiu de cada operação, pra achar o padrão e os dias fracos.</div>
+    </div>
+    <div id="compararOut"></div>
   </div>
   <div class="sub on" id="sub-relat-diadia">
     <div class="linhaform">
@@ -5468,14 +5488,25 @@ function aplicarTodasSugestoes(){
   alert(pend.length+' metas definidas.');
 }
 /* ---- Resumo do dia: quanto saiu de cada operação, melhor e pior ---- */
+// operação-mãe: junta todas as variações numa só (lateral com 1, 2, 3 etiqueta, arremate... = LATERAL)
 const FAMILIAS=[
-  {teste:id=>/^LATERAL/.test(id), nome:'Laterais (todas)'},
-  {teste:id=>/^BAINHA/.test(id), nome:'Bainhas (todas)'},
-  {teste:id=>/^OMBRO/.test(id), nome:'Ombros (todos)'},
-  {teste:id=>/^GOLA/.test(id), nome:'Golas (todas)'},
-  {teste:id=>/^REFORCO/.test(id), nome:'Reforços (todos)'}
+  {teste:id=>/^LATERAL/.test(id),     nome:'Laterais'},
+  {teste:id=>/^BAINHAMANGA/.test(id), nome:'Bainha de manga'},
+  {teste:id=>/^BAINHABARRA/.test(id), nome:'Bainha de barra'},
+  {teste:id=>/^BAINHA/.test(id),      nome:'Bainhas'},
+  {teste:id=>/^OMBRO/.test(id),       nome:'Ombros'},
+  {teste:id=>/^GOLA/.test(id),        nome:'Golas'},
+  {teste:id=>/^REFORCO/.test(id),     nome:'Reforços'},
+  {teste:id=>/^MANGA/.test(id),       nome:'Mangas (pregar)'},
+  {teste:id=>/^PESPONTO/.test(id),    nome:'Pespontos'},
+  {teste:id=>/^ETIQUETA/.test(id),    nome:'Etiquetas'},
+  {teste:id=>/^REVISAO/.test(id),     nome:'Revisões'}
 ];
 function familiaDe(opId){ const f=FAMILIAS.find(x=>x.teste(opId)); return f? f.nome : null; }
+function nomeMae(opId, rotulo){
+  // devolve o nome da operação-mãe; se não casar em nenhuma família, usa o próprio rótulo
+  return familiaDe(opId) || rotulo || opId;
+}
 function ddSet(iso){ const el=document.getElementById('ddDia'); if(el){ el.value=iso; } renderDiaDia(); }
 function ddHoje(){ ddSet(new Date().toISOString().slice(0,10)); }
 function ddOntem(){ const d=new Date(); d.setDate(d.getDate()-1); ddSet(d.toISOString().slice(0,10)); }
@@ -5520,7 +5551,8 @@ function ritmoSustentadoFamilia(testa, desde){
 }
 function renderMeta(){
   const box=document.getElementById('metaOut'); if(!box) return;
-  const meta=Number((document.getElementById('metaDia')||{}).value)||2500;
+  const meta=Number((document.getElementById('metaDia')||{}).value)||S.cfg.metaDiaria||2500;
+  S.cfg.metaDiaria=meta; salvarTudo();
   const jan=Number((document.getElementById('metaJanela')||{}).value)||30;
   const desde=jan>=9999? 0 : Date.now()-jan*86400000;
   const horasDia=horasUteisDia();
@@ -5574,6 +5606,183 @@ function renderMeta(){
 
   box.innerHTML=html;
 }
+function salvarReal(ym, valor){
+  S.realMensal=S.realMensal||{};
+  const n=Number(valor);
+  if(!n || n<0){ delete S.realMensal[ym]; } else { S.realMensal[ym]=n; }
+  salvarTudo(); renderMesAMes();
+}
+// estimativa de camisetas de um mês: a operação-mãe que mais apareceu no mês.
+// (toda camiseta passa uma vez pela revisão/última etapa; na falta dela, a família de maior volume
+//  é o melhor palpite de "quantas camisetas passaram")
+function camisetasEstimadas(ciclosMes){
+  const porMae={};
+  ciclosMes.forEach(c=>{
+    const base=(c.opKey||c.op||'').split('|')[0];
+    const mae=nomeMae(base, c.rotulo);
+    porMae[mae]=(porMae[mae]||0)+qtdEfetiva(c);
+  });
+  // prioriza Revisão se existir (é a última etapa: 1 por camiseta)
+  if(porMae['Revisões']) return {n:porMae['Revisões'], base:'Revisões'};
+  const ent=Object.entries(porMae).sort((a,b)=>b[1]-a[1])[0];
+  return ent? {n:ent[1], base:ent[0]} : {n:0, base:'-'};
+}
+function renderMesAMes(){
+  const box=document.getElementById('mesamesOut'); if(!box) return;
+  const cels=S.ciclos.filter(c=>c.fim && !c.flag);
+  if(!cels.length){ box.innerHTML='<div class="card mini-info">Ainda não há produção. Alimente o histórico em Ajustes → Alimentar histórico.</div>'; return; }
+  const porMes={};
+  cels.forEach(c=>{
+    const d=new Date(c.ini);
+    const k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    (porMes[k]=porMes[k]||[]).push(c);
+  });
+  const meses=Object.keys(porMes).sort();
+  S.realMensal=S.realMensal||{};
+
+  // calcula estimativa e (onde houver real) o fator de correção
+  const linhas=meses.map(k=>{
+    const est=camisetasEstimadas(porMes[k]);
+    const real=S.realMensal[k]||null;
+    const fator=real&&est.n? real/est.n : null;
+    return {k, est:est.n, base:est.base, real, fator};
+  });
+  // fator médio (média dos meses que têm real): é o quanto a estimativa erra
+  const comReal=linhas.filter(l=>l.fator);
+  const fatorMedio=comReal.length? comReal.reduce((s,l)=>s+l.fator,0)/comReal.length : null;
+
+  const fmtMes=(k)=>{ const [y,mo]=k.split('-'); return new Date(y,mo-1,1).toLocaleDateString('pt-BR',{month:'short', year:'numeric'}); };
+  const nf=(n)=>Number(n).toLocaleString('pt-BR');
+
+  let html='';
+  if(fatorMedio){
+    const pct=Math.round((fatorMedio-1)*100);
+    html+='<div class="card"><h3 style="margin-top:0;">O quanto a estimativa erra</h3>'+
+      '<div style="font-size:1.1rem;">Em média, o real é <b>'+fatorMedio.toFixed(2)+'×</b> o que o sistema calcula'+
+      (pct===0?'':' ('+(pct>0?'+':'')+pct+'%')+').</div>'+
+      '<div class="mini-info" style="margin-top:4px;">Baseado em '+comReal.length+' mês(es) que você preencheu. Quanto mais meses reais, melhor a correção. A coluna "ajustado" já aplica esse fator nos meses sem real.</div></div>';
+  }
+
+  html+='<div class="card" style="overflow-x:auto;"><h3 style="margin-top:0;">Mês a mês</h3>'+
+    '<table><tr><th>Mês</th><th>Calculado</th><th>Real (você preenche)</th><th>Diferença</th>'+(fatorMedio?'<th>Ajustado</th>':'')+'</tr>';
+  linhas.forEach(l=>{
+    const inp='<input type="number" style="width:100px;" value="'+(l.real||'')+'" placeholder="—" '+
+      'onchange="salvarReal(\''+l.k+'\', this.value)">';
+    let dif='—';
+    if(l.real && l.est){
+      const d=l.real-l.est; const p=Math.round(d/l.est*100);
+      dif='<span style="color:'+(Math.abs(p)<=10?'#4d7c2a':'#b23b3b')+';">'+(d>=0?'+':'')+nf(d)+' ('+(p>=0?'+':'')+p+'%)</span>';
+    }
+    const ajustado = (!l.real && fatorMedio)? '<b>'+nf(Math.round(l.est*fatorMedio))+'</b>' : (l.real? nf(l.real) : '—');
+    html+='<tr><td><b>'+fmtMes(l.k)+'</b></td>'+
+      '<td>'+nf(l.est)+' <span class="mini-info">('+l.base+')</span></td>'+
+      '<td>'+inp+'</td>'+
+      '<td>'+dif+'</td>'+
+      (fatorMedio?'<td>'+ajustado+'</td>':'')+'</tr>';
+  });
+  html+='</table>';
+  html+='<div class="mini-info" style="margin-top:6px;">"Calculado" é a estimativa pela operação entre parênteses. "Ajustado" aplica o fator de erro médio nos meses que você ainda não preencheu.</div></div>';
+
+  // gráfico de barras: calculado vs real
+  const maxV=Math.max(...linhas.map(l=>Math.max(l.est, l.real||0)),1);
+  html+='<div class="card"><h3 style="margin-top:0;">Evolução</h3><div style="display:flex; align-items:flex-end; gap:10px; height:200px; overflow-x:auto; padding-bottom:4px;">';
+  linhas.forEach(l=>{
+    const hCalc=Math.max(2,(l.est/maxV)*150);
+    const hReal=l.real? Math.max(2,(l.real/maxV)*150):0;
+    html+='<div style="display:flex; flex-direction:column; align-items:center; min-width:60px;">'+
+      '<div style="display:flex; gap:2px; align-items:flex-end; height:160px;">'+
+        '<div title="calculado" style="width:16px; height:'+hCalc+'px; background:#c7a581; border-radius:2px 2px 0 0;"></div>'+
+        (l.real?'<div title="real" style="width:16px; height:'+hReal+'px; background:#3d4d32; border-radius:2px 2px 0 0;"></div>':'')+
+      '</div>'+
+      '<div class="mini-info" style="font-size:.62rem; margin-top:3px;">'+fmtMes(l.k).replace('. de ','/')+'</div></div>';
+  });
+  html+='</div><div class="mini-info" style="margin-top:4px;"><span style="color:#c7a581;">■</span> calculado &nbsp; <span style="color:#3d4d32;">■</span> real</div></div>';
+
+  box.innerHTML=html;
+}
+function mudarMetaDiaria(){
+  const v=prompt('Meta de peças por operação, por dia:', S.cfg.metaDiaria||2500);
+  if(v===null) return;
+  const n=Number(v); if(!n||n<1) return;
+  S.cfg.metaDiaria=n; salvarTudo(); renderDiaDia();
+}
+function cmpUltimos(n){
+  const ate=new Date(); const de=new Date(); de.setDate(de.getDate()-(n-1));
+  const el1=document.getElementById('cmpDe'), el2=document.getElementById('cmpAte');
+  if(el1) el1.value=de.toISOString().slice(0,10);
+  if(el2) el2.value=ate.toISOString().slice(0,10);
+  renderCompararDias();
+}
+function renderCompararDias(){
+  const box=document.getElementById('compararOut'); if(!box) return;
+  const el1=document.getElementById('cmpDe'), el2=document.getElementById('cmpAte');
+  if(el1 && !el1.value){ const d=new Date(); d.setDate(d.getDate()-6); el1.value=d.toISOString().slice(0,10); }
+  if(el2 && !el2.value){ el2.value=new Date().toISOString().slice(0,10); }
+  const de=new Date(el1.value+'T00:00:00'), ate=new Date(el2.value+'T23:59:59');
+  if(de>ate){ box.innerHTML='<div class="card mini-info">A data inicial está depois da final.</div>'; return; }
+  // lista de dias no intervalo
+  const dias=[];
+  for(let d=new Date(de); d<=ate; d.setDate(d.getDate()+1)) dias.push(new Date(d));
+  if(dias.length>62){ box.innerHTML='<div class="card mini-info">Período muito longo pra comparar dia a dia (máx 60 dias). Diminua o intervalo.</div>'; return; }
+  // matriz: operação-mãe × dia
+  const cels=S.ciclos.filter(c=>c.fim && !c.flag && new Date(c.ini)>=de && new Date(c.ini)<=ate);
+  if(!cels.length){ box.innerHTML='<div class="card mini-info">Nenhuma produção neste período.</div>'; return; }
+  const maes={}, porDia={};
+  cels.forEach(c=>{
+    const base=(c.opKey||c.op||'').split('|')[0];
+    const mae=nomeMae(base, c.rotulo);
+    const dk=new Date(c.ini).toDateString();
+    maes[mae]=maes[mae]||{pcs:0};
+    maes[mae].pcs+=qtdEfetiva(c);
+    porDia[dk]=porDia[dk]||{};
+    porDia[dk][mae]=(porDia[dk][mae]||0)+qtdEfetiva(c);
+  });
+  const maesOrd=Object.entries(maes).sort((a,b)=>b[1].pcs-a[1].pcs).map(e=>e[0]);
+  const diasComDado=dias.filter(d=>porDia[d.toDateString()]);
+  const meta=Number(S.cfg.metaDiaria)||2500;
+
+  // tabela: linhas = operação, colunas = dias
+  let html='<div class="card" style="overflow-x:auto;"><h3 style="margin-top:0;">Dia a dia por operação</h3>'+
+    '<table style="min-width:'+(160+diasComDado.length*70)+'px;"><tr><th style="text-align:left;">Operação</th>';
+  diasComDado.forEach(d=>{ html+='<th>'+d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})+'</th>'; });
+  html+='<th>Total</th></tr>';
+  maesOrd.forEach(mae=>{
+    html+='<tr><td style="text-align:left;"><b>'+mae+'</b></td>';
+    let tot=0;
+    diasComDado.forEach(d=>{
+      const v=(porDia[d.toDateString()]||{})[mae]||0;
+      tot+=v;
+      const cor = v===0? '#bbb' : v>=meta? '#4d7c2a' : v>=meta*0.7? '#333' : '#b23b3b';
+      html+='<td style="color:'+cor+'; font-weight:'+(v>=meta?'700':'400')+';">'+(v||'·')+'</td>';
+    });
+    html+='<td style="font-weight:800;">'+tot+'</td></tr>';
+  });
+  // linha de total por dia
+  html+='<tr style="border-top:2px solid #ccc;"><td style="text-align:left;"><b>TOTAL / dia</b></td>';
+  let somaGeral=0;
+  diasComDado.forEach(d=>{
+    const dia=porDia[d.toDateString()]||{};
+    const t=Object.values(dia).reduce((s,v)=>s+v,0); somaGeral+=t;
+    html+='<td style="font-weight:800;">'+t+'</td>';
+  });
+  html+='<td style="font-weight:800;">'+somaGeral+'</td></tr>';
+  html+='</table><div class="mini-info" style="margin-top:6px;">Verde = bateu a meta de '+meta+'. Vermelho = ficou abaixo de 70%. O "·" é dia sem aquela operação.</div></div>';
+
+  // melhor e pior dia do período (por total)
+  const totalPorDia=diasComDado.map(d=>({d, t:Object.values(porDia[d.toDateString()]||{}).reduce((s,v)=>s+v,0)}));
+  if(totalPorDia.length>1){
+    totalPorDia.sort((a,b)=>b.t-a.t);
+    const melhor=totalPorDia[0], pior=totalPorDia[totalPorDia.length-1];
+    const media=Math.round(totalPorDia.reduce((s,x)=>s+x.t,0)/totalPorDia.length);
+    html+='<div class="card"><h3 style="margin-top:0;">No período</h3>'+
+      '<div style="display:flex; gap:24px; flex-wrap:wrap;">'+
+      '<div><div class="mini-info">MELHOR DIA</div><div style="font-size:1.4rem; font-weight:800;">'+melhor.d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})+'</div><div class="mini-info">'+melhor.t+' operações</div></div>'+
+      '<div><div class="mini-info">PIOR DIA</div><div style="font-size:1.4rem; font-weight:800;">'+pior.d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})+'</div><div class="mini-info">'+pior.t+' operações</div></div>'+
+      '<div><div class="mini-info">MÉDIA POR DIA</div><div style="font-size:1.4rem; font-weight:800;">'+media+'</div></div>'+
+      '</div></div>';
+  }
+  box.innerHTML=html;
+}
 function renderDiaDia(){
   const box=document.getElementById('diadiaOut'); if(!box) return;
   const el=document.getElementById('ddDia');
@@ -5582,45 +5791,48 @@ function renderDiaDia(){
   const alvo=new Date(iso+'T00:00:00').toDateString();
   const doDia=S.ciclos.filter(c=>c.fim && !c.flag && new Date(c.ini).toDateString()===alvo);
   if(!doDia.length){ box.innerHTML='<div class="card mini-info">Nenhuma produção registrada neste dia.</div>'; return; }
-  const porOp={};
+  // agrupa TUDO por operação-mãe (laterais = soma de todas as variações)
+  const porMae={};
   doDia.forEach(c=>{
     const base=(c.opKey||c.op||'').split('|')[0];
-    if(!porOp[base]) porOp[base]={rotulo:c.rotulo||base, pcs:0, ms:0, fam:familiaDe(base)};
-    porOp[base].pcs+=qtdEfetiva(c); porOp[base].ms+=tempoUtil(c);
-  });
-  const porFam={};
-  Object.entries(porOp).forEach(([base,g])=>{
-    if(!g.fam) return;
-    if(!porFam[g.fam]) porFam[g.fam]={pcs:0, ms:0, itens:[]};
-    porFam[g.fam].pcs+=g.pcs; porFam[g.fam].ms+=g.ms; porFam[g.fam].itens.push(g);
+    const mae=nomeMae(base, c.rotulo);
+    if(!porMae[mae]) porMae[mae]={mae, pcs:0, ms:0, variacoes:{}};
+    const g=porMae[mae];
+    g.pcs+=qtdEfetiva(c); g.ms+=tempoUtil(c);
+    const rot=c.rotulo||base;
+    g.variacoes[rot]=(g.variacoes[rot]||0)+qtdEfetiva(c);
   });
   const totalPcs=doDia.reduce((s,c)=>s+qtdEfetiva(c),0);
   const totalMs=doDia.reduce((s,c)=>s+tempoUtil(c),0);
   const pessoasDoDia=new Set(doDia.map(c=>c.pessoa)).size;
   let html='<div class="card"><h2 style="margin-top:0;">'+new Date(iso+'T00:00:00').toLocaleDateString('pt-BR',{weekday:'long', day:'2-digit', month:'2-digit'})+'</h2>'+
     '<div style="display:flex; gap:24px; flex-wrap:wrap; margin-top:6px;">'+
-    '<div><div class="mini-info">PEÇAS NO DIA</div><div style="font-size:1.9rem; font-weight:800;">'+totalPcs+'</div></div>'+
+    '<div><div class="mini-info">OPERAÇÕES NO DIA</div><div style="font-size:1.9rem; font-weight:800;">'+totalPcs+'</div></div>'+
     '<div><div class="mini-info">HORAS</div><div style="font-size:1.9rem; font-weight:800;">'+fmtH(totalMs)+'</div></div>'+
     '<div><div class="mini-info">PESSOAS</div><div style="font-size:1.9rem; font-weight:800;">'+pessoasDoDia+'</div></div>'+
     '<div><div class="mini-info">MÉDIA GERAL</div><div style="font-size:1.9rem; font-weight:800;">'+Math.round(totalPcs/(totalMs/3600000))+' <span style="font-size:.9rem;">pçs/h</span></div></div>'+
     '</div></div>';
-  const linhas=[];
-  Object.entries(porFam).forEach(([nome,f])=>{
-    const media=Math.round(f.pcs/(f.ms/3600000));
-    let sub='';
-    if(f.itens.length>1){
-      sub='<div class="mini-info" style="margin-top:3px;">'+f.itens.sort((a,b)=>b.pcs-a.pcs).map(i=>i.rotulo+': '+i.pcs).join(' · ')+'</div>';
-    }
-    linhas.push({pcs:f.pcs, html:'<tr><td><b>'+nome+'</b>'+sub+'</td><td style="font-size:1.15rem;"><b>'+f.pcs+'</b> pçs</td><td>'+media+' pçs/h</td></tr>'});
-  });
-  Object.entries(porOp).forEach(([base,g])=>{
-    if(g.fam) return;
+  const metaVol=Number(S.cfg.metaDiaria)||2500;
+  const linhas=Object.values(porMae).sort((a,b)=>b.pcs-a.pcs).map(g=>{
     const media=Math.round(g.pcs/(g.ms/3600000));
-    linhas.push({pcs:g.pcs, html:'<tr><td><b>'+g.rotulo+'</b></td><td style="font-size:1.15rem;"><b>'+g.pcs+'</b> pçs</td><td>'+media+' pçs/h</td></tr>'});
+    const vars=Object.entries(g.variacoes);
+    let sub='';
+    if(vars.length>1){
+      sub='<div class="mini-info" style="margin-top:3px;">'+vars.sort((a,b)=>b[1]-a[1]).map(([r,q])=>r+': '+q).join(' · ')+'</div>';
+    }
+    // meta de volume: quanto falta pra bater a meta do dia nessa operação
+    const dif=g.pcs-metaVol;
+    let metaCol;
+    if(dif>=0) metaCol='<span style="color:#4d7c2a; font-weight:700;">✓ '+g.pcs+' / '+metaVol+'</span>';
+    else metaCol='<span style="color:#b23b3b; font-weight:700;">faltaram '+(metaVol-g.pcs)+'</span><div class="mini-info">'+g.pcs+' / '+metaVol+'</div>';
+    return '<tr><td><b style="font-size:1.05rem;">'+g.mae+'</b>'+sub+'</td>'+
+      '<td style="font-size:1.35rem;"><b>'+g.pcs+'</b></td>'+
+      '<td>'+metaCol+'</td>'+
+      '<td>'+media+' pçs/h</td></tr>';
   });
-  linhas.sort((a,b)=>b.pcs-a.pcs);
-  html+='<div class="card"><h3 style="margin-top:0;">Quanto saiu de cada operação</h3>'+
-    '<table><tr><th>Operação</th><th>Peças</th><th>Ritmo</th></tr>'+linhas.map(l=>l.html).join('')+'</table></div>';
+  html+='<div class="card"><h3 style="margin-top:0;">Quanto saiu de cada operação hoje</h3>'+
+    '<div class="mini-info" style="margin-bottom:6px;">Meta de <b>'+metaVol+'</b> por operação. A que ficar mais abaixo é o gargalo do dia. <button class="acao mini sec" onclick="mudarMetaDiaria()">alterar meta</button></div>'+
+    '<table><tr><th>Operação</th><th>Feitas</th><th>Meta ('+metaVol+')</th><th>Ritmo</th></tr>'+linhas.join('')+'</table></div>';
   const desemp=[];
   const porPessoaOp={};
   doDia.forEach(c=>{
@@ -5976,7 +6188,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.30.2';
+const VERSAO = '3.33.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -6052,6 +6264,8 @@ document.querySelectorAll('.subtabs').forEach(grupo=>{
       if(alvo2) alvo2.classList.add('on');
       if(btn.dataset.s==='diadia') renderDiaDia();
       if(btn.dataset.s==='meta') renderMeta();
+      if(btn.dataset.s==='comparardias') renderCompararDias();
+      if(btn.dataset.s==='mesames') renderMesAMes();
       if(btn.dataset.s==='calibra') renderCalibra();
     });
   });
@@ -6079,7 +6293,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
