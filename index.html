@@ -2631,14 +2631,22 @@ nav button.oculto{display:none;}
     <div class="card">
       <div class="linhaform" style="align-items:flex-end;">
         <div><label>Meta de camisetas prontas por dia</label><input type="number" id="metaDia" value="2500" style="width:120px;" onchange="renderMeta()"></div>
-        <div><label>Olhar os últimos</label><select id="metaJanela" onchange="renderMeta()">
+        <div><label>Período</label><select id="metaModo" onchange="metaTrocaModo()">
+          <option value="janela">Últimos N dias</option>
+          <option value="mes">Um mês específico</option>
+          <option value="intervalo">Entre datas</option>
+        </select></div>
+        <div id="metaWrapJanela"><label>Quantos dias</label><select id="metaJanela" onchange="renderMeta()">
           <option value="7">7 dias</option>
           <option value="30" selected>30 dias</option>
           <option value="90">90 dias</option>
           <option value="9999">todo o histórico</option>
         </select></div>
+        <div id="metaWrapMes" style="display:none;"><label>Mês</label><select id="metaMes" onchange="renderMeta()"></select></div>
+        <div id="metaWrapDe" style="display:none;"><label>De</label><input type="date" id="metaDe" onchange="renderMeta()"></div>
+        <div id="metaWrapAte" style="display:none;"><label>Até</label><input type="date" id="metaAte" onchange="renderMeta()"></div>
       </div>
-      <div class="mini-info">O sistema olha o melhor ritmo que cada operação já sustentou e calcula quantas pessoas seriam necessárias pra ela entregar a meta por dia. A operação que mais precisa é o seu gargalo.</div>
+      <div class="mini-info">O sistema olha o melhor ritmo que cada operação já sustentou no período e calcula quantas pessoas seriam necessárias pra ela entregar a meta por dia. A operação que mais precisa é o seu gargalo.</div>
     </div>
     <div id="metaOut"></div>
   </div>
@@ -4244,11 +4252,26 @@ function lerPlanilhaProducao(wb, nomeArquivo){
     if(row.some(x=> typeof x==='string' && normOp(x).length>2)){ rOp=i; break; }
   }
   if(rOp<0) throw new Error('não achei a linha das operações');
-  if(rHoras<0) throw new Error('não achei a linha de HORAS');
-  // acha a linha TOTAL (se existir) pra não somar ela junto com os lançamentos
+  // acha a linha TOTAL: precisa ter a palavra TOTAL E números na mesma linha
+  // (uma linha vazia com "TOTAL" solto numa célula perdida não conta)
   let rTotal=-1;
-  for(let i=rOp+1;i<rHoras;i++){ if((g[i]||[]).some(x=>normOp(x)==='TOTAL')){ rTotal=i; break; } }
-  const fimSoma = rTotal>=0 ? rTotal : rHoras;
+  for(let i=rOp+1;i<g.length;i++){
+    const row=g[i]||[];
+    const temPalavra=row.some(x=>normOp(x)==='TOTAL');
+    const temNumeros=row.filter(x=>typeof x==='number' && x>0).length>=1;
+    if(temPalavra && temNumeros){ rTotal=i; break; }
+  }
+  // se não achou HORAS, tenta achar depois do TOTAL
+  if(rHoras<0 && rTotal>=0){
+    for(let i=rTotal+1;i<Math.min(rTotal+4,g.length);i++){
+      if((g[i]||[]).some(x=>normOp(x)==='HORAS')){ rHoras=i; break; }
+    }
+  }
+  // fim da soma manual (só usado quando não há linha TOTAL): para na primeira linha de resumo
+  if(rHoras<0) throw new Error('não achei a linha de HORAS');
+  const ehResumo=(row)=>{ const t=(row||[]).map(x=>normOp(x)); return t.some(x=>['FUNCAO','SOMA','MEDIA','M DIA','DIAS','MDIA','TOTAL','HORAS'].includes(x)); };
+  let fimSoma = rHoras>0? rHoras : g.length;
+  for(let i=rOp+1; i<fimSoma; i++){ if(ehResumo(g[i])){ fimSoma=i; break; } }
   // nome da pessoa: célula de texto solta na área de cima, ou o nome do arquivo
   let pessoa='';
   const nomesConhecidos=S.pessoas.map(p=>normOp(p.nome));
@@ -4258,21 +4281,25 @@ function lerPlanilhaProducao(wb, nomeArquivo){
   if(!pessoa){ const base=String(nomeArquivo||'').replace(/\.[^.]+$/,''); if(base) pessoa=base.trim(); }
   // varre as colunas
   const lanc=[];
-  const ncols=Math.max(...g.slice(rData,rHoras+1).map(r=>(r||[]).length));
+  const refRow = rTotal>=0? rTotal : (rHoras>0? rHoras : rData);
+  const ncols=Math.max((g[rData]||[]).length, (g[rOp]||[]).length, (g[refRow]||[]).length);
   for(let c=0;c<ncols;c++){
     const dv=(g[rData]||[])[c]; if(!isData(dv)) continue;
     const data=toData(dv); if(!data) continue;
     const opTxt=(g[rOp]||[])[c]; if(!opTxt || typeof opTxt!=='string') continue;
     const horas=Number((g[rHoras]||[])[c])||0;
-    // soma os lançamentos entre a linha de operação e a linha TOTAL (ou HORAS)
+    // se a planilha tem a linha TOTAL, ela é a fonte da verdade (a costureira já conferiu).
+    // Só somamos os lançamentos manualmente quando NÃO há linha TOTAL.
     let pecas=0;
-    for(let i=rOp+1;i<fimSoma;i++){
-      const v=(g[i]||[])[c];
-      const n=Number(v);
-      if(typeof v==='number' && isFinite(n) && n>0) pecas+=n;
+    if(rTotal>=0){
+      pecas=Number((g[rTotal]||[])[c])||0;
+    } else {
+      for(let i=rOp+1;i<fimSoma;i++){
+        const v=(g[i]||[])[c];
+        const n=Number(v);
+        if(typeof v==='number' && isFinite(n) && n>0) pecas+=n;
+      }
     }
-    // se não houver lançamentos detalhados, usa o valor da linha TOTAL
-    if(pecas===0 && rTotal>=0){ const tv=Number((g[rTotal]||[])[c])||0; if(tv>0) pecas=tv; }
     if(pecas>0 && horas>0) lanc.push({pessoa, data, opTxt:String(opTxt).trim(), pecas, horas});
   }
   return {pessoa, lanc};
@@ -5525,12 +5552,13 @@ const OPS_CAMISETA=[
   {fam:'Bainha barra', testa:id=>id==='BAINHABARRA'},
   {fam:'Revisão',  testa:id=>id==='REVISAO'}
 ];
-function ritmoSustentadoFamilia(testa, desde){
+function ritmoSustentadoFamilia(testa, desde, ate){
   // melhor ritmo/hora que a família sustentou por dia (percentil 75 dos dias-pessoa)
+  const fim = ate || Infinity;
   const porDia={};
   S.ciclos.forEach(c=>{
     if(!c.fim || c.flag) return;
-    if(c.ini<desde) return;
+    if(c.ini<desde || c.ini>fim) return;
     const base=(c.opKey||c.op||'').split('|')[0];
     if(!testa(base)) return;
     const k=c.pessoa+'|'+new Date(c.ini).toDateString();
@@ -5549,17 +5577,62 @@ function ritmoSustentadoFamilia(testa, desde){
   const medio=totMs? totPcs/(totMs/3600000) : 0;
   return {ritmo:p75, medio, diasPessoa, totPcs};
 }
+function metaMesesDisponiveis(){
+  const set=new Set();
+  S.ciclos.forEach(c=>{ if(c.fim && !c.flag){ const d=new Date(c.ini); set.add(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')); } });
+  return [...set].sort();
+}
+function metaTrocaModo(){
+  const modo=(document.getElementById('metaModo')||{}).value||'janela';
+  document.getElementById('metaWrapJanela').style.display = modo==='janela'?'':'none';
+  document.getElementById('metaWrapMes').style.display    = modo==='mes'?'':'none';
+  document.getElementById('metaWrapDe').style.display     = modo==='intervalo'?'':'none';
+  document.getElementById('metaWrapAte').style.display    = modo==='intervalo'?'':'none';
+  if(modo==='mes'){
+    const sel=document.getElementById('metaMes');
+    if(sel && !sel.options.length){
+      const meses=metaMesesDisponiveis();
+      sel.innerHTML=meses.map(k=>{ const [y,mo]=k.split('-'); return '<option value="'+k+'">'+new Date(y,mo-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'})+'</option>'; }).join('');
+      if(meses.length) sel.value=meses[meses.length-1];
+    }
+  }
+  renderMeta();
+}
+function metaPeriodo(){
+  const modo=(document.getElementById('metaModo')||{}).value||'janela';
+  if(modo==='mes'){
+    const k=(document.getElementById('metaMes')||{}).value;
+    if(!k) return {desde:0, ate:Infinity, rotulo:'', diasUteis:22};
+    const [y,mo]=k.split('-').map(Number);
+    const ini=new Date(y,mo-1,1,0,0,0);
+    const fim=new Date(y,mo,0,23,59,59);
+    return {desde:ini.getTime(), ate:fim.getTime(), rotulo:ini.toLocaleDateString('pt-BR',{month:'long',year:'numeric'}), diasUteis:diasUteisNoIntervalo(ini,fim)};
+  }
+  if(modo==='intervalo'){
+    const de=(document.getElementById('metaDe')||{}).value, ate=(document.getElementById('metaAte')||{}).value;
+    if(!de||!ate) return {desde:0, ate:Infinity, rotulo:'', diasUteis:22};
+    const ini=new Date(de+'T00:00:00'), fim=new Date(ate+'T23:59:59');
+    return {desde:ini.getTime(), ate:fim.getTime(), rotulo:ini.toLocaleDateString('pt-BR')+' a '+fim.toLocaleDateString('pt-BR'), diasUteis:diasUteisNoIntervalo(ini,fim)};
+  }
+  const jan=Number((document.getElementById('metaJanela')||{}).value)||30;
+  return {desde: jan>=9999? 0 : Date.now()-jan*86400000, ate:Infinity, rotulo: jan>=9999?'todo o histórico':'últimos '+jan+' dias', diasUteis:null};
+}
+function diasUteisNoIntervalo(ini,fim){
+  let n=0; const d=new Date(ini); d.setHours(12,0,0,0);
+  while(d<=fim){ const wd=d.getDay(); if(wd>=1&&wd<=5) n++; d.setDate(d.getDate()+1); }
+  return Math.max(1,n);
+}
 function renderMeta(){
   const box=document.getElementById('metaOut'); if(!box) return;
   const meta=Number((document.getElementById('metaDia')||{}).value)||S.cfg.metaDiaria||2500;
   S.cfg.metaDiaria=meta; salvarTudo();
-  const jan=Number((document.getElementById('metaJanela')||{}).value)||30;
-  const desde=jan>=9999? 0 : Date.now()-jan*86400000;
+  const per=metaPeriodo();
+  const desde=per.desde, ate=per.ate;
   const horasDia=horasUteisDia();
   const pessoasHoje=Math.max(1,(S.pessoas||[]).length);
 
   const linhas=OPS_CAMISETA.map(op=>{
-    const r=ritmoSustentadoFamilia(op.testa, desde);
+    const r=ritmoSustentadoFamilia(op.testa, desde, ate);
     // peças/dia que UMA pessoa entrega nessa operação
     const porPessoaDia=r.ritmo*horasDia;
     // quantas pessoas seriam necessárias pra fazer a meta nessa operação
@@ -5578,6 +5651,7 @@ function renderMeta(){
       '<b>Ainda faltam dados de:</b> '+faltam.join(', ')+'. Alimente mais planilhas dessas operações pra conta ficar completa.</div>';
   }
   html+='<h3 style="margin-top:0;">Pra fazer '+meta+' camisetas por dia</h3>'+
+    (per.rotulo? '<div class="mini-info" style="margin:-4px 0 8px;">Baseado em: <b>'+per.rotulo+'</b></div>':'')+
     '<div style="display:flex; gap:24px; flex-wrap:wrap;">'+
     '<div><div class="mini-info">PESSOAS NECESSÁRIAS (todas as operações)</div><div style="font-size:1.9rem; font-weight:800;">'+Math.ceil(totalPessoasNec)+'</div></div>'+
     '<div><div class="mini-info">VOCÊ TEM HOJE</div><div style="font-size:1.9rem; font-weight:800;">'+pessoasHoje+'</div></div>'+
@@ -5757,28 +5831,31 @@ function renderCompararDias(){
     });
     html+='<td style="font-weight:800;">'+tot+'</td></tr>';
   });
-  // linha de total por dia
-  html+='<tr style="border-top:2px solid #ccc;"><td style="text-align:left;"><b>TOTAL / dia</b></td>';
-  let somaGeral=0;
+  // linha de CAMISETAS estimadas por dia (a operação de maior volume, não a soma).
+  // Somar operações de tipos diferentes não é número de camisetas — cada camiseta passa por várias.
+  html+='<tr style="border-top:2px solid #ccc;"><td style="text-align:left;"><b>≈ Camisetas/dia</b></td>';
+  let somaCam=0;
   diasComDado.forEach(d=>{
     const dia=porDia[d.toDateString()]||{};
-    const t=Object.values(dia).reduce((s,v)=>s+v,0); somaGeral+=t;
-    html+='<td style="font-weight:800;">'+t+'</td>';
+    const cam=Math.max(0,...Object.values(dia));   // a operação que mais saiu ≈ nº de camisetas
+    somaCam+=cam;
+    const cor=cam>=meta?'#4d7c2a':cam>=meta*0.7?'#333':'#b23b3b';
+    html+='<td style="font-weight:800; color:'+cor+';">'+(cam||'·')+'</td>';
   });
-  html+='<td style="font-weight:800;">'+somaGeral+'</td></tr>';
-  html+='</table><div class="mini-info" style="margin-top:6px;">Verde = bateu a meta de '+meta+'. Vermelho = ficou abaixo de 70%. O "·" é dia sem aquela operação.</div></div>';
+  html+='<td style="font-weight:800;">'+somaCam+'</td></tr>';
+  html+='</table><div class="mini-info" style="margin-top:6px;">Cada número é quantas <b>operações</b> daquele tipo saíram no dia (uma lateral, um ombro...). A última linha estima as <b>camisetas</b> pela operação de maior volume — <b>não</b> é a soma das operações, porque cada camiseta passa por várias. Verde = bateu a meta de '+meta+'.</div></div>';
 
-  // melhor e pior dia do período (por total)
-  const totalPorDia=diasComDado.map(d=>({d, t:Object.values(porDia[d.toDateString()]||{}).reduce((s,v)=>s+v,0)}));
+  // melhor e pior dia do período (por camisetas estimadas)
+  const totalPorDia=diasComDado.map(d=>({d, t:Math.max(0,...Object.values(porDia[d.toDateString()]||{}))}));
   if(totalPorDia.length>1){
     totalPorDia.sort((a,b)=>b.t-a.t);
     const melhor=totalPorDia[0], pior=totalPorDia[totalPorDia.length-1];
     const media=Math.round(totalPorDia.reduce((s,x)=>s+x.t,0)/totalPorDia.length);
     html+='<div class="card"><h3 style="margin-top:0;">No período</h3>'+
       '<div style="display:flex; gap:24px; flex-wrap:wrap;">'+
-      '<div><div class="mini-info">MELHOR DIA</div><div style="font-size:1.4rem; font-weight:800;">'+melhor.d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})+'</div><div class="mini-info">'+melhor.t+' operações</div></div>'+
-      '<div><div class="mini-info">PIOR DIA</div><div style="font-size:1.4rem; font-weight:800;">'+pior.d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})+'</div><div class="mini-info">'+pior.t+' operações</div></div>'+
-      '<div><div class="mini-info">MÉDIA POR DIA</div><div style="font-size:1.4rem; font-weight:800;">'+media+'</div></div>'+
+      '<div><div class="mini-info">MELHOR DIA</div><div style="font-size:1.4rem; font-weight:800;">'+melhor.d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})+'</div><div class="mini-info">~'+melhor.t+' camisetas</div></div>'+
+      '<div><div class="mini-info">PIOR DIA</div><div style="font-size:1.4rem; font-weight:800;">'+pior.d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})+'</div><div class="mini-info">~'+pior.t+' camisetas</div></div>'+
+      '<div><div class="mini-info">MÉDIA CAMISETAS/DIA</div><div style="font-size:1.4rem; font-weight:800;">~'+media+'</div></div>'+
       '</div></div>';
   }
   box.innerHTML=html;
@@ -6188,7 +6265,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.33.0';
+const VERSAO = '3.34.1';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -6293,7 +6370,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
