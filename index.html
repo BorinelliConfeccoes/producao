@@ -4262,15 +4262,23 @@ function lerPlanilhaProducao(wb, nomeArquivo){
     if(row.some(x=> typeof x==='string' && normOp(x).length>2)){ rOp=i; break; }
   }
   if(rOp<0) throw new Error('não achei a linha das operações');
-  // acha a linha TOTAL: precisa ter a palavra TOTAL E números na mesma linha
-  // (uma linha vazia com "TOTAL" solto numa célula perdida não conta)
-  let rTotal=-1;
+  // acha a linha TOTAL de verdade: a palavra "TOTAL" tem que estar nas primeiras colunas (A/B/C)
+  // E a linha precisa ter vários números nas MESMAS colunas onde há datas.
+  // Isso evita cair numa tabela lateral (à direita) ou num número solto perdido.
+  const colunasComData=[];
+  (g[rData]||[]).forEach((v,c)=>{ if(isData(v)) colunasComData.push(c); });
+  let rTotal=-1, melhorScore=0;
   for(let i=rOp+1;i<g.length;i++){
     const row=g[i]||[];
-    const temPalavra=row.some(x=>normOp(x)==='TOTAL');
-    const temNumeros=row.filter(x=>typeof x==='number' && x>0).length>=1;
-    if(temPalavra && temNumeros){ rTotal=i; break; }
+    // a palavra TOTAL precisa estar nas 3 primeiras colunas
+    const temPalavra=row.slice(0,3).some(x=>normOp(x)==='TOTAL');
+    if(!temPalavra) continue;
+    // conta quantas colunas-de-data têm número nesta linha
+    const alinhados=colunasComData.filter(c=>typeof row[c]==='number' && row[c]>0).length;
+    if(alinhados>melhorScore){ melhorScore=alinhados; rTotal=i; }
   }
+  // se nenhuma linha "TOTAL" bateu com as datas, ignora (vamos somar os lançamentos manualmente)
+  if(rTotal>=0 && melhorScore < Math.max(2, colunasComData.length*0.3)) rTotal=-1;
   // se não achou HORAS, tenta achar depois do TOTAL
   if(rHoras<0 && rTotal>=0){
     for(let i=rTotal+1;i<Math.min(rTotal+4,g.length);i++){
@@ -4507,18 +4515,22 @@ function gravarImportacao(todos, criadas){
       else agr[chave]={chave, pessoaId:l.pessoaId, pessoa:l.pessoa, data:l.data, opId, pecas:l.pecas, horas:l.horas};
     });
     // 2) grava
-    let criados=0, pulados=0;
+    let criados=0, atualizados=0;
     Object.values(agr).forEach(a=>{
-      const existente=S.ciclos.find(c=>c.id===a.chave);
-      if(existente){ pulados++; return; }
       const ini=new Date(a.data); ini.setHours(7,0,0,0);
       const rotulo=(S.opsBase.find(o=>o.id===a.opId)||{}).nome||a.opId;
-      S.ciclos.push({id:a.chave, pessoa:a.pessoaId, op:a.opId, opKey:a.opId, rotulo, etapaIdx:-1,
+      const existenteIdx=S.ciclos.findIndex(c=>c.id===a.chave);
+      const novo={id:a.chave, pessoa:a.pessoaId, op:a.opId, opKey:a.opId, rotulo, etapaIdx:-1,
         ordem:'(planilha)', tam:'-', pacote:'-', qtd:a.pecas, ini:ini.getTime(), fim:ini.getTime()+a.horas*3600000,
-        pausas:[], rateEfetivo:a.pecas/a.horas, importado:true, impLote:loteId});
-      criados++;
+        pausas:[], rateEfetivo:a.pecas/a.horas, importado:true, impLote:loteId};
+      if(existenteIdx>=0){
+        // já existia (reimportação): SUBSTITUI pelo valor novo, corrige dado antigo errado
+        S.ciclos[existenteIdx]=novo; atualizados++;
+      } else {
+        S.ciclos.push(novo); criados++;
+      }
     });
-    if(criados){
+    if(criados || atualizados){
       S.importacoes=S.importacoes||[];
       const resumoPessoas=[...new Set(todos.map(l=>l.pessoa))].join(', ');
       S.importacoes.push({lote:loteId, quando:Date.now(), pessoas:resumoPessoas, qtd:criados,
@@ -4530,7 +4542,7 @@ function gravarImportacao(todos, criadas){
     const pcsGravadas=Object.values(agr).reduce((s,a)=>s+a.pecas,0);
     alert('Planilhas importadas.\n\n'+criados+' lançamentos criados'+
       (somados? '\n'+somados+' linhas foram SOMADAS (caíram no mesmo dia e na mesma operação)':'')+
-      (pulados? '\n'+pulados+' já existiam de uma importação anterior (não dupliquei)':'')+
+      (atualizados? '\n'+atualizados+' já existiam e foram ATUALIZADOS com o valor novo':'')+
       (ignorados? '\n'+ignorados+' ignorados':'')+
       '\n\nPor pessoa:\n'+Object.entries(resumo).map(([k,v])=>'  '+k+': '+v+' pçs').join('\n')+
       ((criadas&&criadas.length)? '\n\nOperações NOVAS criadas:\n'+criadas.map(n=>'  • '+n).join('\n')+'\n\nDefina as metas delas em Ajustes → Operações.' : '')+
@@ -4554,6 +4566,16 @@ function limparImportados(){
   S.ciclos=S.ciclos.filter(c=>!c.importado);
   S.importacoes=[];
   S.mapaOps={};   // esquece o mapa antigo (que pode estar errado)
+  // apaga também as faltas/atestados que vieram de planilha (as marcadas com _dias),
+  // preservando ajustes manuais de prêmio que você fez
+  if(S.presenca){
+    Object.keys(S.presenca).forEach(ym=>{
+      Object.keys(S.presenca[ym]).forEach(pid=>{
+        const p=S.presenca[ym][pid];
+        if(p._dias){ p.faltas=0; p.atestados=0; p.atrasos=0; p.saidas=0; p._dias={}; }
+      });
+    });
+  }
   salvarTudo(); renderTudo();
   alert(n+' lançamentos removidos.\n\nAgora importe as planilhas de novo. Na tela de conferência, veja se cada operação está indo pro lugar certo.');
 }
@@ -5802,8 +5824,17 @@ function calcularPremio(ym, pid, metaMensalCamisetas){
   let motivoProd='';
   if(faltasInjust>0){ premioProd={valor:0,faixa:0}; motivoProd='falta sem justificativa zera a produção'; }
   else if(teto<100){ motivoProd='limitado a '+teto+'% por '+(pres.atrasos>=2?'atrasos':'')+(pres.saidas?' saídas':''); }
-  return {assid, motivoAssid, pctProd, pctFinal, teto, premioProd:premioProd.valor, faixaProd:premioProd.faixa, motivoProd,
-          dias:prod.diasTrab, pcs:prod.pcs, total:assid+premioProd.valor};
+  // valores calculados pela regra
+  const assidCalc=assid, prodCalc=premioProd.valor;
+  // OVERRIDE MANUAL: você pode pagar diferente do que a regra diz (após conversa).
+  const ov=pres.override||{};
+  let assidFinal=assidCalc, prodFinal=prodCalc, ajustado=false;
+  if(ov.assid!=null && ov.assid!==''){ assidFinal=Number(ov.assid)||0; ajustado=true; }
+  if(ov.prod!=null && ov.prod!==''){ prodFinal=Number(ov.prod)||0; ajustado=true; }
+  return {assid:assidFinal, assidCalc, motivoAssid, pctProd, pctFinal, teto,
+          premioProd:prodFinal, prodCalc, faixaProd:premioProd.faixa, motivoProd,
+          ajustado, motivoAjuste:ov.motivo||'',
+          dias:prod.diasTrab, pcs:prod.pcs, total:assidFinal+prodFinal};
 }
 function producaoPessoaMes(ym, pid){
   const [y,mo]=ym.split('-').map(Number);
@@ -5825,6 +5856,35 @@ function diasUteisMes(ym){
   for(let d=1; d<=fim.getDate(); d++){ const wd=new Date(y,mo-1,d).getDay(); if(wd>=1&&wd<=5) n++; }
   return Math.max(1,n);
 }
+function setOverride(ym, pid, campo, valor){
+  const p=presencaDe(ym, pid);
+  p.override=p.override||{};
+  if(valor==='' || valor==null) delete p.override[campo];
+  else p.override[campo]=campo==='motivo'? String(valor) : (Number(valor)||0);
+  // se não sobrou nada no override, limpa
+  if(p.override.assid==null && p.override.prod==null && !p.override.motivo) delete p.override;
+  salvarTudo(); renderPremios();
+}
+function limparOverride(ym, pid){
+  const p=presencaDe(ym, pid);
+  delete p.override; salvarTudo(); renderPremios();
+}
+function ajustarPremio(ym, pid, nome){
+  const p=presencaDe(ym, pid);
+  const ov=p.override||{};
+  const r=calcularPremio(ym, pid, Number(S.cfg.metaDiaria||2500));
+  const novaAssid=prompt('Assiduidade de '+nome+' (a regra calculou R$ '+r.assidCalc+').\n\nDeixe em branco pra usar o valor da regra, ou digite o valor que você vai pagar:', ov.assid!=null?ov.assid:'');
+  if(novaAssid===null) return;
+  const novaProd=prompt('Produção de '+nome+' (a regra calculou R$ '+r.prodCalc+').\n\nDeixe em branco pra usar o valor da regra, ou digite o valor:', ov.prod!=null?ov.prod:'');
+  if(novaProd===null) return;
+  const motivo=prompt('Motivo do ajuste (fica registrado):', ov.motivo||'');
+  p.override={};
+  if(novaAssid!=='') p.override.assid=Number(novaAssid)||0;
+  if(novaProd!=='') p.override.prod=Number(novaProd)||0;
+  if(motivo) p.override.motivo=motivo;
+  if(p.override.assid==null && p.override.prod==null){ delete p.override; }
+  salvarTudo(); renderPremios();
+}
 function renderPremios(){
   const box=document.getElementById('premiosOut'); if(!box) return;
   const sel=document.getElementById('premMes');
@@ -5845,7 +5905,7 @@ function renderPremios(){
 
   html+='<div class="card" style="overflow-x:auto;"><table>'+
     '<tr><th>Pessoa</th><th>Dias</th><th>Peças</th><th>Faltas</th><th>Atestados</th><th>Atrasos>10min</th><th>Saídas</th><th>% Produção</th>'+
-    '<th style="background:#eef5e6;">💰 ASSIDUIDADE</th><th style="background:#fdf6e9;">🎯 PRODUÇÃO</th><th>TOTAL</th></tr>';
+    '<th style="background:#eef5e6;">💰 ASSIDUIDADE</th><th style="background:#fdf6e9;">🎯 PRODUÇÃO</th><th>TOTAL</th><th></th></tr>';
   let totGeral=0, totAssid=0, totProd=0;
   pids.map(pid=>({pid, r:calcularPremio(ym,pid,metaMensal), nome:(S.pessoas.find(p=>p.id===pid)||{}).nome||pid}))
       .sort((a,b)=>b.r.total-a.r.total)
@@ -5853,7 +5913,20 @@ function renderPremios(){
     totGeral+=r.total; totAssid+=r.assid; totProd+=r.premioProd;
     const inp=(campo,val)=>'<input type="number" min="0" style="width:52px;" value="'+val+'" onchange="setPresenca(\''+ym+'\',\''+pid+'\',\''+campo+'\',this.value)">';
     const pres=presencaDe(ym,pid);
-    html+='<tr><td><b>'+nome+'</b></td>'+
+    // célula de valor: se ajustado manualmente, mostra o novo e risca o da regra
+    const cell=(final, calc, extra, bg)=>{
+      const mudou = final!==calc;
+      let s='<td style="background:'+bg+'; font-weight:700;">';
+      if(mudou){
+        s+='<span style="color:#8a5a00;">R$ '+final+'</span> <span class="mini-info" style="text-decoration:line-through; font-weight:400;">R$ '+calc+'</span>';
+      } else {
+        s+=(final>0?'R$ '+final:'<span style="color:#b23b3b;">R$ 0</span>');
+      }
+      if(extra) s+='<div class="mini-info" style="font-weight:400;">'+extra+'</div>';
+      s+='</td>';
+      return s;
+    };
+    html+='<tr><td><b>'+nome+'</b>'+(r.ajustado?' <span title="'+(r.motivoAjuste||'ajuste manual')+'" style="cursor:help;">✏️</span>':'')+'</td>'+
       '<td>'+r.dias+'</td>'+
       '<td>'+r.pcs+'</td>'+
       '<td>'+inp('faltas',pres.faltas)+'</td>'+
@@ -5861,15 +5934,20 @@ function renderPremios(){
       '<td>'+inp('atrasos',pres.atrasos)+'</td>'+
       '<td>'+inp('saidas',pres.saidas)+'</td>'+
       '<td>'+r.pctFinal+'%'+(r.teto<100?' <span class="mini-info">(teto '+r.teto+'%)</span>':'')+'</td>'+
-      '<td style="background:#f5faf0; font-weight:700;">'+(r.assid>0?'R$ '+r.assid.toFixed(0):'<span style="color:#b23b3b;">R$ 0</span>')+'<div class="mini-info" style="font-weight:400;">'+r.motivoAssid+'</div></td>'+
-      '<td style="background:#fdf9f0; font-weight:700;">'+(r.premioProd>0?'R$ '+r.premioProd:'<span style="color:#b23b3b;">R$ 0</span>')+(r.faixaProd?'<div class="mini-info" style="font-weight:400;">'+r.faixaProd+'%</div>':'')+'</td>'+
-      '<td><b>R$ '+r.total.toFixed(0)+'</b></td></tr>';
+      cell(r.assid, r.assidCalc, r.motivoAssid, '#f5faf0')+
+      cell(r.premioProd, r.prodCalc, r.faixaProd?r.faixaProd+'%':'', '#fdf9f0')+
+      '<td><b>R$ '+r.total.toFixed(0)+'</b></td>'+
+      '<td><button class="acao mini sec" onclick="ajustarPremio(\''+ym+'\',\''+pid+'\',\''+nome.replace(/'/g,'')+'\')">ajustar</button>'+
+        (r.ajustado?'<br><button class="acao mini" style="margin-top:3px;" onclick="limparOverride(\''+ym+'\',\''+pid+'\')">desfazer</button>':'')+'</td></tr>';
+    if(r.ajustado && r.motivoAjuste){
+      html+='<tr><td colspan="12" class="mini-info" style="padding-top:0; color:#8a5a00;">✏️ '+nome+': '+r.motivoAjuste+'</td></tr>';
+    }
   });
   html+='<tr style="border-top:2px solid #ccc;"><td colspan="8" style="text-align:right;"><b>TOTAIS</b></td>'+
     '<td style="background:#eef5e6;"><b>R$ '+totAssid.toFixed(0)+'</b></td>'+
     '<td style="background:#fdf6e9;"><b>R$ '+totProd.toFixed(0)+'</b></td>'+
-    '<td><b>R$ '+totGeral.toFixed(0)+'</b></td></tr>';
-  html+='</table></div>';
+    '<td><b>R$ '+totGeral.toFixed(0)+'</b></td><td></td></tr>';
+  html+='</table><div class="mini-info" style="margin-top:6px;">O botão <b>ajustar</b> deixa você pagar diferente do que a regra calculou (quando foi conversado). O valor riscado é o da regra; o destacado é o que você definiu.</div></div>';
 
   html+='<div class="card"><div style="display:flex; gap:24px; flex-wrap:wrap;">'+
     '<div><div class="mini-info">TOTAL ASSIDUIDADE</div><div style="font-size:1.6rem; font-weight:800; color:#4d7c2a;">R$ '+totAssid.toFixed(0)+'</div></div>'+
@@ -6447,7 +6525,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.37.0';
+const VERSAO = '3.38.2';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -6553,7 +6631,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, setOverride, limparOverride, ajustarPremio});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
