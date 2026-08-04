@@ -2594,12 +2594,22 @@ nav button.oculto{display:none;}
     <button data-s="diadia" class="on">📅 Resumo do dia</button>
     <button data-s="comparardias">📈 Comparar dias</button>
     <button data-s="mesames">🗓 Mês a mês</button>
+    <button data-s="premios">💰 Prêmios</button>
     <button data-s="meta">🎯 Meta / Gargalos</button>
     <button data-s="individual">👤 Individual</button>
     <button data-s="envio">💬 Média do dia</button>
     <button data-s="comparativo">⚖️ Comparativo</button>
     <button data-s="calibra">🎯 Calibração</button>
     <button data-s="ocorr">🧩 Ocorrências</button>
+  </div>
+  <div class="sub" id="sub-relat-premios">
+    <div class="card">
+      <div class="linhaform" style="align-items:flex-end;">
+        <div><label>Mês</label><select id="premMes" onchange="renderPremios()"></select></div>
+      </div>
+      <div class="mini-info">Dias trabalhados, faltas, atestados, e quanto cada pessoa recebe de assiduidade e produção, pelas regras da empresa.</div>
+    </div>
+    <div id="premiosOut"></div>
   </div>
   <div class="sub" id="sub-relat-mesames">
     <div class="card">
@@ -4281,12 +4291,23 @@ function lerPlanilhaProducao(wb, nomeArquivo){
   if(!pessoa){ const base=String(nomeArquivo||'').replace(/\.[^.]+$/,''); if(base) pessoa=base.trim(); }
   // varre as colunas
   const lanc=[];
+  const ausencias=[];
   const refRow = rTotal>=0? rTotal : (rHoras>0? rHoras : rData);
   const ncols=Math.max((g[rData]||[]).length, (g[rOp]||[]).length, (g[refRow]||[]).length);
   for(let c=0;c<ncols;c++){
     const dv=(g[rData]||[])[c]; if(!isData(dv)) continue;
     const data=toData(dv); if(!data) continue;
     const opTxt=(g[rOp]||[])[c]; if(!opTxt || typeof opTxt!=='string') continue;
+    // FALTA / FALTA ATESTADO / ATRASO / SAÍDA no lugar da operação = evento de presença, não produção
+    const opN=normOp(opTxt);
+    if(opN==='FALTA ATESTADO' || opN==='ATESTADO' || opN==='FALTA COM ATESTADO'){
+      ausencias.push({pessoa, data, tipo:'atestado'}); continue;
+    }
+    if(opN==='FALTA' || opN==='FALTOU'){
+      ausencias.push({pessoa, data, tipo:'falta'}); continue;
+    }
+    if(opN==='ATRASO' || opN==='ATRASADO'){ ausencias.push({pessoa, data, tipo:'atraso'}); continue; }
+    if(opN==='SAIDA' || opN==='SAIDA ANTECIPADA'){ ausencias.push({pessoa, data, tipo:'saida'}); continue; }
     const horas=Number((g[rHoras]||[])[c])||0;
     // se a planilha tem a linha TOTAL, ela é a fonte da verdade (a costureira já conferiu).
     // Só somamos os lançamentos manualmente quando NÃO há linha TOTAL.
@@ -4302,7 +4323,7 @@ function lerPlanilhaProducao(wb, nomeArquivo){
     }
     if(pecas>0 && horas>0) lanc.push({pessoa, data, opTxt:String(opTxt).trim(), pecas, horas});
   }
-  return {pessoa, lanc};
+  return {pessoa, lanc, ausencias};
 }
 function importarPlanilhaClick(){
   if(!autorizado()) return;
@@ -4317,17 +4338,35 @@ function importarPlanilhaClick(){
   const f=document.getElementById('arqPlanilha'); f.value=''; f.click();
 }
 let _pessoaImport=null;
+function registrarAusencias(lista){
+  S.presenca=S.presenca||{};
+  const mapaCampo={falta:'faltas', atestado:'atestados', atraso:'atrasos', saida:'saidas'};
+  lista.forEach(a=>{
+    const d=a.data;
+    const ym=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    const chaveDia=a.pessoaId+'|'+d.toDateString()+'|'+a.tipo;
+    S.presenca[ym]=S.presenca[ym]||{};
+    S.presenca[ym][a.pessoaId]=S.presenca[ym][a.pessoaId]||{faltas:0,atestados:0,atrasos:0,saidas:0, _dias:{}};
+    const p=S.presenca[ym][a.pessoaId];
+    p._dias=p._dias||{};
+    if(p._dias[chaveDia]) return;   // já contado (reimport, ou 2 colunas no mesmo dia)
+    p._dias[chaveDia]=true;
+    const campo=mapaCampo[a.tipo];
+    if(campo) p[campo]=(p[campo]||0)+1;
+  });
+  salvarTudo();
+}
 async function importarPlanilha(files){
   if(!files||!files.length) return;
   if(typeof XLSX==='undefined') return alert('A biblioteca de Excel não carregou. Confira a internet e recarregue a página.');
   try{
     const escolhida=_pessoaImport; _pessoaImport=null;
-    let todos=[], semPessoa=[];
+    let todos=[], semPessoa=[], ausenciasTodas=[];
     for(const file of files){
       const buf=await file.arrayBuffer();
       const wb=XLSX.read(buf,{type:'array', cellDates:true});
       const r=lerPlanilhaProducao(wb, file.name);
-      if(!r.lanc.length) continue;
+      if(!r.lanc.length && !(r.ausencias||[]).length) continue;
       let pid, pnome;
       if(escolhida){ pid=escolhida.id; pnome=escolhida.nome; }
       else {
@@ -4335,9 +4374,15 @@ async function importarPlanilha(files){
         if(achou){ pid=achou.id; pnome=achou.nome; } else { semPessoa.push(r.pessoa||file.name); continue; }
       }
       r.lanc.forEach(l=>{ l.pessoaId=pid; l.pessoa=pnome; todos.push(l); });
+      (r.ausencias||[]).forEach(a=>{ a.pessoaId=pid; ausenciasTodas.push(a); });
     }
-    if(semPessoa.length && !todos.length) return alert('Não reconheci a pessoa: '+[...new Set(semPessoa)].join(', ')+'.\n\nEscolha a pessoa na lista ao importar, ou cadastre com esse mesmo nome em Ajustes → Pessoas.');
-    if(!todos.length) return alert('Não encontrei lançamentos nessas planilhas. Confira se elas têm as linhas de data, operação e HORAS.');
+    // registra as faltas/atestados/atrasos/saídas lidos da planilha
+    if(ausenciasTodas.length) registrarAusencias(ausenciasTodas);
+    if(semPessoa.length && !todos.length && !ausenciasTodas.length) return alert('Não reconheci a pessoa: '+[...new Set(semPessoa)].join(', ')+'.\n\nEscolha a pessoa na lista ao importar, ou cadastre com esse mesmo nome em Ajustes → Pessoas.');
+    if(!todos.length){
+      if(ausenciasTodas.length){ salvarTudo(); renderTudo(); return alert('Planilha só tinha faltas/atestados. Registrei '+ausenciasTodas.length+' evento(s) de presença. Veja em Relatórios → Prêmios.'); }
+      return alert('Não encontrei lançamentos nessas planilhas. Confira se elas têm as linhas de data, operação e HORAS.');
+    }
     if(escolhida && files.length>1 && !confirm('Você escolheu '+escolhida.nome+'.\n\nTodas as '+files.length+' planilhas selecionadas vão ser importadas como sendo dela. Continuar?')) return;
     // mapeamento das operações da planilha -> operações do sistema
     S.mapaOps=S.mapaOps||{};
@@ -5701,6 +5746,143 @@ function camisetasEstimadas(ciclosMes){
   const ent=Object.entries(porMae).sort((a,b)=>b[1]-a[1])[0];
   return ent? {n:ent[1], base:ent[0]} : {n:0, base:'-'};
 }
+/* ---- Prêmios: assiduidade e produção, pelas regras da empresa ---- */
+const PREMIO_ASSIDUIDADE = 315;
+// tabela de produção: percentual atingido → valor. abaixo de 70% não ganha.
+const TABELA_PRODUCAO = [
+  {pct:100, valor:500}, {pct:90, valor:450}, {pct:80, valor:400}, {pct:70, valor:250}
+];
+function valorProducao(pctAtingido){
+  for(const f of TABELA_PRODUCAO){ if(pctAtingido>=f.pct) return {valor:f.valor, faixa:f.pct}; }
+  return {valor:0, faixa:0};
+}
+function premMeses(){
+  const set=new Set();
+  S.ciclos.forEach(c=>{ if(c.fim && !c.flag){ const d=new Date(c.ini); set.add(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')); } });
+  return [...set].sort();
+}
+// eventos de presença por pessoa/mês (falta, atestado, atraso, saída) — preenchidos à mão por ora,
+// guardados em S.presenca['2026-07']['GRASI'] = {faltas, atestados, atrasos, saidas}
+function presencaDe(ym, pid){
+  S.presenca=S.presenca||{};
+  S.presenca[ym]=S.presenca[ym]||{};
+  S.presenca[ym][pid]=S.presenca[ym][pid]||{faltas:0, atestados:0, atrasos:0, saidas:0, _dias:{}};
+  return S.presenca[ym][pid];
+}
+function setPresenca(ym, pid, campo, valor){
+  const p=presencaDe(ym, pid);
+  p[campo]=Math.max(0, Math.floor(Number(valor)||0));
+  salvarTudo(); renderPremios();
+}
+// calcula assiduidade e produção de uma pessoa num mês
+function calcularPremio(ym, pid, metaMensalCamisetas){
+  const pres=presencaDe(ym, pid);
+  // --- ASSIDUIDADE ---
+  // integral só sem nenhuma falta. 1ª falta atestado: -50%. 2ª+ atestado: -100%.
+  // falta sem justificativa: -100% assiduidade E -100% produção.
+  let assid=PREMIO_ASSIDUIDADE;
+  const faltasInjust=pres.faltas;      // faltas sem atestado
+  const atestados=pres.atestados;      // faltas com atestado
+  let motivoAssid='integral';
+  if(faltasInjust>0){ assid=0; motivoAssid='falta sem justificativa'; }
+  else if(atestados>=2){ assid=0; motivoAssid=atestados+' atestados'; }
+  else if(atestados===1){ assid=PREMIO_ASSIDUIDADE*0.5; motivoAssid='1 atestado (-50%)'; }
+  // --- PRODUÇÃO ---
+  // percentual real de produção no mês (sobre os dias trabalhados), aplicado na tabela.
+  // atestado não afeta produção. falta injustificada zera. atrasos/saídas limitam o teto.
+  const prod=producaoPessoaMes(ym, pid);
+  let pctProd = metaMensalCamisetas>0? Math.round(prod.pcs / (metaMensalCamisetas*prod.diasTrab/diasUteisMes(ym)) *100) : 0;
+  // teto por atrasos e saídas
+  let teto=100;
+  if(pres.atrasos>=2) teto=Math.min(teto,80);
+  if(pres.saidas>=2) teto=Math.min(teto,70);
+  else if(pres.saidas===1) teto=Math.min(teto,80);
+  let pctFinal=Math.min(pctProd, teto);
+  let premioProd=valorProducao(pctFinal);
+  let motivoProd='';
+  if(faltasInjust>0){ premioProd={valor:0,faixa:0}; motivoProd='falta sem justificativa zera a produção'; }
+  else if(teto<100){ motivoProd='limitado a '+teto+'% por '+(pres.atrasos>=2?'atrasos':'')+(pres.saidas?' saídas':''); }
+  return {assid, motivoAssid, pctProd, pctFinal, teto, premioProd:premioProd.valor, faixaProd:premioProd.faixa, motivoProd,
+          dias:prod.diasTrab, pcs:prod.pcs, total:assid+premioProd.valor};
+}
+function producaoPessoaMes(ym, pid){
+  const [y,mo]=ym.split('-').map(Number);
+  const dias=new Set();
+  let pcs=0, ms=0;
+  S.ciclos.forEach(c=>{
+    if(!c.fim || c.flag || c.pessoa!==pid) return;
+    const d=new Date(c.ini);
+    if(d.getFullYear()!==y || d.getMonth()!==mo-1) return;
+    dias.add(d.toDateString());
+    pcs+=qtdEfetiva(c); ms+=tempoUtil(c);
+  });
+  return {diasTrab:dias.size, pcs, ms};
+}
+function diasUteisMes(ym){
+  const [y,mo]=ym.split('-').map(Number);
+  const fim=new Date(y,mo,0);
+  let n=0;
+  for(let d=1; d<=fim.getDate(); d++){ const wd=new Date(y,mo-1,d).getDay(); if(wd>=1&&wd<=5) n++; }
+  return Math.max(1,n);
+}
+function renderPremios(){
+  const box=document.getElementById('premiosOut'); if(!box) return;
+  const sel=document.getElementById('premMes');
+  if(sel && !sel.options.length){
+    const meses=premMeses();
+    sel.innerHTML=meses.map(k=>{ const [y,mo]=k.split('-'); return '<option value="'+k+'">'+new Date(y,mo-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'})+'</option>'; }).join('');
+    if(meses.length) sel.value=meses[meses.length-1];
+  }
+  const ym=sel? sel.value : null;
+  if(!ym){ box.innerHTML='<div class="card mini-info">Sem produção registrada. Alimente o histórico primeiro.</div>'; return; }
+  const metaMensal=Number(S.cfg.metaDiaria||2500);
+  // pessoas que produziram no mês
+  const pids=[...new Set(S.ciclos.filter(c=>{ if(!c.fim||c.flag) return false; const d=new Date(c.ini); return (d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'))===ym; }).map(c=>c.pessoa))];
+  if(!pids.length){ box.innerHTML='<div class="card mini-info">Ninguém produziu neste mês.</div>'; return; }
+
+  let html='<div class="card" style="background:#fdf6e9; border-left:4px solid #c7a581;"><div class="mini-info">'+
+    '<b>Faltas, atestados, atrasos e saídas ainda são preenchidos à mão aqui.</b> Assim que definirmos como isso aparece na planilha, o sistema lê sozinho. Por enquanto, digite os números de cada pessoa e o cálculo já roda pelas regras.</div></div>';
+
+  html+='<div class="card" style="overflow-x:auto;"><table>'+
+    '<tr><th>Pessoa</th><th>Dias</th><th>Peças</th><th>Faltas</th><th>Atestados</th><th>Atrasos>10min</th><th>Saídas</th><th>% Produção</th>'+
+    '<th style="background:#eef5e6;">💰 ASSIDUIDADE</th><th style="background:#fdf6e9;">🎯 PRODUÇÃO</th><th>TOTAL</th></tr>';
+  let totGeral=0, totAssid=0, totProd=0;
+  pids.map(pid=>({pid, r:calcularPremio(ym,pid,metaMensal), nome:(S.pessoas.find(p=>p.id===pid)||{}).nome||pid}))
+      .sort((a,b)=>b.r.total-a.r.total)
+      .forEach(({pid,r,nome})=>{
+    totGeral+=r.total; totAssid+=r.assid; totProd+=r.premioProd;
+    const inp=(campo,val)=>'<input type="number" min="0" style="width:52px;" value="'+val+'" onchange="setPresenca(\''+ym+'\',\''+pid+'\',\''+campo+'\',this.value)">';
+    const pres=presencaDe(ym,pid);
+    html+='<tr><td><b>'+nome+'</b></td>'+
+      '<td>'+r.dias+'</td>'+
+      '<td>'+r.pcs+'</td>'+
+      '<td>'+inp('faltas',pres.faltas)+'</td>'+
+      '<td>'+inp('atestados',pres.atestados)+'</td>'+
+      '<td>'+inp('atrasos',pres.atrasos)+'</td>'+
+      '<td>'+inp('saidas',pres.saidas)+'</td>'+
+      '<td>'+r.pctFinal+'%'+(r.teto<100?' <span class="mini-info">(teto '+r.teto+'%)</span>':'')+'</td>'+
+      '<td style="background:#f5faf0; font-weight:700;">'+(r.assid>0?'R$ '+r.assid.toFixed(0):'<span style="color:#b23b3b;">R$ 0</span>')+'<div class="mini-info" style="font-weight:400;">'+r.motivoAssid+'</div></td>'+
+      '<td style="background:#fdf9f0; font-weight:700;">'+(r.premioProd>0?'R$ '+r.premioProd:'<span style="color:#b23b3b;">R$ 0</span>')+(r.faixaProd?'<div class="mini-info" style="font-weight:400;">'+r.faixaProd+'%</div>':'')+'</td>'+
+      '<td><b>R$ '+r.total.toFixed(0)+'</b></td></tr>';
+  });
+  html+='<tr style="border-top:2px solid #ccc;"><td colspan="8" style="text-align:right;"><b>TOTAIS</b></td>'+
+    '<td style="background:#eef5e6;"><b>R$ '+totAssid.toFixed(0)+'</b></td>'+
+    '<td style="background:#fdf6e9;"><b>R$ '+totProd.toFixed(0)+'</b></td>'+
+    '<td><b>R$ '+totGeral.toFixed(0)+'</b></td></tr>';
+  html+='</table></div>';
+
+  html+='<div class="card"><div style="display:flex; gap:24px; flex-wrap:wrap;">'+
+    '<div><div class="mini-info">TOTAL ASSIDUIDADE</div><div style="font-size:1.6rem; font-weight:800; color:#4d7c2a;">R$ '+totAssid.toFixed(0)+'</div></div>'+
+    '<div><div class="mini-info">TOTAL PRODUÇÃO</div><div style="font-size:1.6rem; font-weight:800; color:#8a6d3b;">R$ '+totProd.toFixed(0)+'</div></div>'+
+    '<div><div class="mini-info">TOTAL GERAL</div><div style="font-size:1.6rem; font-weight:800;">R$ '+totGeral.toFixed(0)+'</div></div>'+
+    '</div></div>';
+
+  html+='<div class="card"><h3 style="margin-top:0;">As regras aplicadas</h3><div class="mini-info" style="line-height:1.7;">'+
+    '<b>Assiduidade (R$ '+PREMIO_ASSIDUIDADE+'):</b> integral só sem nenhuma falta. 1 atestado: -50%. 2+ atestados: zera. Falta sem justificativa: zera assiduidade E produção.<br>'+
+    '<b>Produção:</b> 100%=R$500, 90%=R$450, 80%=R$400, 70%=R$250, abaixo de 70% não ganha. Atestado não afeta produção (a meta cai proporcional aos dias). 2 atrasos >10min: teto 80%. 1 saída antecipada: teto 80%, 2ª: teto 70%.</div></div>';
+
+  box.innerHTML=html;
+}
 function renderMesAMes(){
   const box=document.getElementById('mesamesOut'); if(!box) return;
   const cels=S.ciclos.filter(c=>c.fim && !c.flag);
@@ -6265,7 +6447,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.34.1';
+const VERSAO = '3.37.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -6343,6 +6525,7 @@ document.querySelectorAll('.subtabs').forEach(grupo=>{
       if(btn.dataset.s==='meta') renderMeta();
       if(btn.dataset.s==='comparardias') renderCompararDias();
       if(btn.dataset.s==='mesames') renderMesAMes();
+      if(btn.dataset.s==='premios') renderPremios();
       if(btn.dataset.s==='calibra') renderCalibra();
     });
   });
@@ -6370,7 +6553,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
