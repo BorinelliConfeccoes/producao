@@ -2860,8 +2860,15 @@ nav button.oculto{display:none;}
     <div class="linhaform">
       <div><label>Autoconfirmar bipagem após (s) · 0 = desligado</label><input id="cfgAuto" type="number" min="0" max="10" style="width:100px;"></div>
       <div><label>Som e vibração no bip</label><select id="cfgSom" style="width:120px;"><option value="sim">Ligado</option><option value="nao">Desligado</option></select></div>
+    </div>
+    <div class="linhaform">
+      <div><label>Margem de apuração (%)</label><input id="cfgMargem" type="number" min="0" max="10" step="0.5" style="width:110px;"></div>
+      <div><label>Parada conta a partir de (min)</label><input id="cfgParada" type="number" min="3" max="60" style="width:140px;"></div>
+      <div><label>Almoço início</label><input id="cfgAlmIni" type="time"></div>
+      <div><label>Almoço fim</label><input id="cfgAlmFim" type="time"></div>
       <button class="acao" onclick="salvarCfg()">Salvar regras</button>
     </div>
+    <div class="mini-info">A margem de apuração sobe a pessoa de faixa quando ela chega perto da meta, no mínimo 1 pç/h. Existe porque a contagem tem erro: bipagem falha, peça refugada entra na conta e nem toda troca de linha sai do tempo. Quem sobe pela margem aparece com <b>*</b> no selo.</div>
   </div>
   </div>
   <div class="sub" id="sub-aj-pessoas">
@@ -3239,6 +3246,10 @@ async function carregar(){
   S.marcas=S.marcas||[]; S.metasVar=S.metasVar||{};
   (S.ordens||[]).forEach(o=>{ o.etapas=o.etapas||[]; o.externos=o.externos||[]; o.chegadas=o.chegadas||[]; o.resolvidos=o.resolvidos||[]; });
   if(S.cfg.empacadoMin===undefined) S.cfg.empacadoMin=45;
+  if(S.cfg.margemApur===undefined) S.cfg.margemApur=2;
+  if(S.cfg.paradaMin===undefined) S.cfg.paradaMin=10;
+  if(S.cfg.almocoIni===undefined) S.cfg.almocoIni='11:30';
+  if(S.cfg.almocoFim===undefined) S.cfg.almocoFim='13:00';
   (S.ciclos||[]).forEach(c=>{ if(!c.opKey) c.opKey=c.op; if(!c.rotulo) c.rotulo=(S.opsBase.find(x=>x.id===c.op)||{}).nome||c.op; if(c.etapaIdx===undefined) c.etapaIdx=-1; });
   fecharDiasAnteriores();
   renderTudo(); preencherCfg();
@@ -3280,6 +3291,271 @@ function metasDe(opKey){
   const base=opKey.split('|')[0];
   return (S.opsBase.find(o=>o.id===base)||{}).metas||[0,0,0,0];
 }
+/* ================= ANÁLISE INDIVIDUAL =================
+   Métrica só serve se a pessoa reconhecer. Então tudo aqui aponta pra algo
+   que ela sente no dia: a hora em que cai, o tempo parada esperando, a
+   operação em que está longe da meta e quem na célula faz melhor. */
+function opBaseDe(c){ return (c.opKey||c.op||'').split('|')[0]; }
+function ciclosDe(pid, dias){
+  const desde = (dias>=9999)? 0 : Date.now()-dias*86400000;
+  return S.ciclos.filter(c=>c.pessoa===pid && c.fim && !c.flag && !c.lote && c.ini>=desde);
+}
+/* Distribui peças e tempo útil de cada ciclo pelas horas do relógio.
+   O ritmo cru em pçs/h NÃO serve para comparar horas entre si: quem pega uma
+   operação mais lenta à tarde apareceria como quem caiu de ritmo. Por isso cada
+   hora é medida contra a referência da operação que rodou nela (meta 100%, ou a
+   média da própria pessoa quando a operação ainda não tem meta). */
+function curvaDoDia(ciclos, refPorOp){
+  const b={};
+  ciclos.forEach(c=>{
+    const fim=c.fim||Date.now();
+    const span=Math.max(fim-c.ini, 60000);
+    const fator=tempoUtil(c)/span;
+    const pcs=qtdEfetiva(c);
+    const ref=(refPorOp||{})[opBaseDe(c)] || 0;
+    let t=c.ini, guarda=0;
+    while(t<fim && guarda++<48){
+      const d=new Date(t); const h=d.getHours();
+      const prox=new Date(t); prox.setMinutes(0,0,0); prox.setHours(h+1);
+      const fimB=Math.min(fim, prox.getTime());
+      const parte=Math.max(fimB-t, 0);
+      if(!b[h]) b[h]={ms:0, pcs:0, esp:0, msRef:0};
+      const msUtil=parte*fator;
+      b[h].ms += msUtil;
+      b[h].pcs += pcs*(parte/span);
+      if(ref>0){ b[h].esp += ref*(msUtil/3600000); b[h].msRef += msUtil; }
+      t=fimB;
+    }
+  });
+  return Object.entries(b).map(([h,g])=>{
+    const horas=g.ms/3600000;
+    const pcsRef = g.msRef>0? g.pcs*(g.msRef/g.ms) : 0;
+    return {h:Number(h), pcs:g.pcs, horas,
+            media:(g.ms>0? g.pcs/horas : 0),
+            pct:(g.esp>0? (pcsRef/g.esp)*100 : null),
+            cobertura:(g.ms>0? g.msRef/g.ms : 0)};
+  }).filter(x=>x.horas>0.15).sort((a,b)=>a.h-b.h);
+}
+/* buracos entre um pacote e o outro, já descontando café e o tempo de troca previsto */
+const PARADA_TETO_MIN = 90;   // buraco maior que isso é ausência ou almoço fora do horário, não parada
+function paradasDe(ciclos){
+  const minMs=(Number(S.cfg.paradaMin)||10)*60000;
+  const trocaMs=(Number(S.cfg.troca)||0)*60000;
+  const porDia={};
+  ciclos.forEach(c=>{ const d=fmtData(c.ini); (porDia[d]=porDia[d]||[]).push(c); });
+  let total=0, n=0; const dias=Object.keys(porDia).length;
+  Object.values(porDia).forEach(arr=>{
+    arr.sort((a,b)=>a.ini-b.ini);
+    for(let i=1;i<arr.length;i++){
+      const fimAnt=arr[i-1].fim; if(!fimAnt) continue;
+      const iniProx=arr[i].ini;
+      let gap=iniProx-fimAnt; if(gap<=0) continue;
+      const cIni=horaDoDia(fimAnt,S.cfg.cafeIni), cFim=horaDoDia(fimAnt,S.cfg.cafeFim)+((Number(S.cfg.cafeTol)||0)*60000);
+      gap -= overlap(fimAnt, iniProx, cIni, cFim);
+      if(S.cfg.almocoIni && S.cfg.almocoFim){
+        gap -= overlap(fimAnt, iniProx, horaDoDia(fimAnt,S.cfg.almocoIni), horaDoDia(fimAnt,S.cfg.almocoFim));
+      }
+      gap -= trocaMs;
+      if(gap>PARADA_TETO_MIN*60000) continue;   // não é parada de máquina, é outra coisa
+      if(gap>=minMs){ total+=gap; n++; }
+    }
+  });
+  return {ms:total, n, dias, msDia: dias? total/dias : 0};
+}
+/* quem na célula tem o melhor ritmo na mesma operação */
+function melhorDaCelula(opBase, dias, excluiPid){
+  const desde=(dias>=9999)? 0 : Date.now()-dias*86400000;
+  const por={};
+  S.ciclos.forEach(c=>{
+    if(!c.fim || c.flag || c.lote || c.ini<desde) return;
+    if(opBaseDe(c)!==opBase) return;
+    if(!por[c.pessoa]) por[c.pessoa]={pcs:0, ms:0};
+    por[c.pessoa].pcs+=qtdEfetiva(c); por[c.pessoa].ms+=tempoUtil(c);
+  });
+  let best=null;
+  Object.entries(por).forEach(([pid,g])=>{
+    const h=g.ms/3600000; if(h<3) return;
+    const r=g.pcs/h;
+    if(pid===excluiPid) return;
+    if(!best || r>best.rate) best={pid, rate:r};
+  });
+  if(!best) return null;
+  const p=S.pessoas.find(x=>x.id===best.pid);
+  return {nome: p? p.nome : '—', rate: best.rate};
+}
+/* Custo da troca. A comparação tem que ser DENTRO da mesma operação: o primeiro
+   pacote depois de trocar contra os pacotes emendados da mesma operação. Comparar
+   com "o resto do dia" mediria a diferença entre operações, não o custo da troca. */
+function custoTroca(ciclos){
+  const porDia={};
+  ciclos.forEach(c=>{ const d=fmtData(c.ini); (porDia[d]=porDia[d]||[]).push(c); });
+  const porOp={}; let trocas=0; const dias=Object.keys(porDia).length;
+  Object.values(porDia).forEach(arr=>{
+    arr.sort((a,b)=>a.ini-b.ini);
+    let anterior=null;
+    arr.forEach(c=>{
+      const base=opBaseDe(c);
+      const trocou = anterior!==null && base!==anterior;
+      if(trocou) trocas++;
+      if(!porOp[base]) porOp[base]={apPcs:0, apMs:0, resPcs:0, resMs:0};
+      const g=porOp[base];
+      if(trocou){ g.apPcs+=qtdEfetiva(c); g.apMs+=tempoUtil(c); }
+      else { g.resPcs+=qtdEfetiva(c); g.resMs+=tempoUtil(c); }
+      anterior=base;
+    });
+  });
+  let perda=0, hTroca=0, apPcs=0, apMs=0, resPcs=0, resMs=0;
+  Object.values(porOp).forEach(g=>{
+    if(g.apMs<3600000 || g.resMs<3600000) return;      // sem os dois lados, não dá pra comparar
+    const rAp=g.apPcs/(g.apMs/3600000), rRes=g.resPcs/(g.resMs/3600000);
+    apPcs+=g.apPcs; apMs+=g.apMs; resPcs+=g.resPcs; resMs+=g.resMs;
+    if(rRes>rAp){ perda += (rRes-rAp)*(g.apMs/3600000); hTroca += g.apMs/3600000; }
+  });
+  if(!apMs || !resMs) return null;
+  return {aposTroca: apPcs/(apMs/3600000), normal: resPcs/(resMs/3600000),
+          perdaDia: dias? perda/dias : 0, trocasDia: dias? trocas/dias : 0,
+          horasTrocaDia: dias? hTroca/dias : 0};
+}
+/* monta ponto forte + a melhor sugestão, sempre com número em peça por dia */
+function analisePessoa(pid, dias){
+  const meus=ciclosDe(pid, dias);
+  if(meus.length<3) return null;
+  const totPcs=meus.reduce((s,c)=>s+qtdEfetiva(c),0);
+  const totMs=meus.reduce((s,c)=>s+tempoUtil(c),0);
+  const nDias=new Set(meus.map(c=>fmtData(c.ini))).size || 1;
+  const media=totPcs/(totMs/3600000);
+  const horasDia=(totMs/3600000)/nDias;
+
+  const porOp={};
+  meus.forEach(c=>{ const k=opBaseDe(c);
+    if(!porOp[k]) porOp[k]={rotulo:c.rotulo, pcs:0, ms:0};
+    porOp[k].pcs+=qtdEfetiva(c); porOp[k].ms+=tempoUtil(c); });
+  const ops=Object.entries(porOp).map(([k,g])=>{
+    const h=g.ms/3600000, md=g.pcs/h;
+    const [m70,,,m100]=metasDe(k);
+    const f=faixaDe(k, md);
+    return {key:k, rotulo:g.rotulo, pcs:g.pcs, horas:h, media:md, meta:m100||0,
+            temMeta:!!m70, faixa:f.tx, cls:f.cls, margem:f.margem, pct:f.pct,
+            horasDia:h/nDias, falta:faltaPra(k, md, h), melhor:melhorDaCelula(k, dias, pid)};
+  }).sort((a,b)=>b.horas-a.horas);
+
+  const AMOSTRA_OK = nDias>=3 && meus.length>=8;   // um dia solto não vira diagnóstico
+  const refPorOp={}; ops.forEach(o=>{ refPorOp[o.key]= o.meta || o.media; });
+  const curva=curvaDoDia(meus, refPorOp);
+  const par=paradasDe(meus);
+  const tro=AMOSTRA_OK? custoTroca(meus) : null;
+
+  /* ---- ponto forte: onde ela está melhor contra a meta, ou o melhor dia ---- */
+  const comMeta=ops.filter(o=>o.temMeta && o.pct!==null);
+  const destaque = comMeta.length? comMeta.slice().sort((a,b)=>b.pct-a.pct)[0] : ops[0];
+  let destaqueTx='';
+  if(destaque){
+    const lider = destaque.melhor && destaque.media>=destaque.melhor.rate;
+    destaqueTx = destaque.rotulo+': '+Math.round(destaque.media)+' pçs/h'+
+      (destaque.temMeta? ' · faixa '+destaque.faixa : '')+
+      (lider? ' · a melhor da célula nessa operação' : '');
+  }
+
+  /* ---- candidatas a sugestão, todas medidas em peças por dia ---- */
+  const cands=[];
+  ops.forEach(o=>{
+    if(!o.temMeta || !o.falta || o.falta==='faixa máxima') return;
+    const alvoTx=o.falta;
+    const difMatch=/faltam (\d+) pçs\/h para (\d+%)/.exec(alvoTx);
+    if(!difMatch) return;
+    const dif=Number(difMatch[1]);
+    const ganho=dif*o.horasDia;
+    let txt='Em '+o.rotulo+' você está em '+Math.round(o.media)+' pçs/h e '+alvoTx.replace(/ \(.*\)$/,'')+'.';
+    if(o.melhor && o.melhor.rate>o.media+2) txt+=' '+o.melhor.nome+' faz '+Math.round(o.melhor.rate)+' pçs/h na mesma operação, vale ver como ela pega a peça.';
+    txt+=' Fechando essa diferença são cerca de '+Math.round(ganho)+' peças a mais por dia.';
+    cands.push({ganho, txt, tag:'operação'});
+  });
+  if(AMOSTRA_OK && par.n && par.msDia>0){
+    const ganho=(par.msDia/3600000)*media;
+    if(ganho>=10) cands.push({ganho, tag:'parada',
+      txt:'Você teve '+par.n+' paradas acima de '+(Number(S.cfg.paradaMin)||10)+' min, média de '+Math.round(par.msDia/60000)+' min por dia entre um pacote e o outro. No seu ritmo isso vale cerca de '+Math.round(ganho)+' peças por dia. Se for espera de peça, avisa na hora em vez de esperar.'});
+  }
+  const curvaCmp=curva.filter(c=>c.pct!==null && c.cobertura>=0.7 && c.horas>0.5);
+  if(AMOSTRA_OK && curvaCmp.length>=4){
+    const ord=curvaCmp.slice().sort((x,y)=>y.pct-x.pct);
+    const boa=ord[0], ruim=ord[ord.length-1];
+    const ref=Math.min(boa.pct, 100);   // não faz sentido pedir para manter acima da meta o dia todo
+    // soma o que cada hora fraca deixa na mesa se rodasse no ritmo da melhor hora
+    let ganho=0; const fracas=[];
+    curvaCmp.forEach(c=>{
+      if(c.pct >= ref-5) return;
+      const esperado=c.pcs/(c.pct/100);
+      ganho += ((ref-c.pct)/100)*esperado;
+      fracas.push(c.h);
+    });
+    ganho=ganho/nDias;
+    if(ruim.pct < ref-8 && ganho>=10) cands.push({ganho, tag:'ritmo do dia',
+      txt:'Comparando cada hora com o padrão da operação que rodou nela: às '+String(boa.h).padStart(2,'0')+'h você fica em '+Math.round(boa.pct)+'% e às '+String(ruim.h).padStart(2,'0')+'h cai para '+Math.round(ruim.pct)+'%'+(fracas.length>1? ' (as horas mais fracas são '+fracas.map(h=>String(h).padStart(2,'0')+'h').join(', ')+')' : '')+'. Segurar o ritmo nesses horários vale cerca de '+Math.round(ganho)+' peças por dia.'});
+  }
+  if(tro && tro.perdaDia>0 && tro.trocasDia>=1){
+    const ganho=tro.perdaDia;
+    if(ganho>=10) cands.push({ganho, tag:'troca de operação',
+      txt:'Você troca de operação '+tro.trocasDia.toFixed(1).replace('.',',')+' vezes por dia. Na mesma operação, o pacote logo depois da troca rende menos que os pacotes emendados. Juntando as operações, isso custa cerca de '+Math.round(ganho)+' peças por dia. Emendar mais pacotes da mesma operação recupera boa parte disso.'});
+  }
+  // nenhuma sugestão pode prometer mais do que 25% do que a pessoa já produz por dia.
+  // estimativa que estoura isso é ruído de amostra, não oportunidade.
+  const teto=(totPcs/nDias)*0.25;
+  const cands2=cands.filter(c=>c.ganho>0).map(c=>Object.assign({}, c, {ganho:Math.min(c.ganho, teto)}));
+  cands2.sort((x,y)=>y.ganho-x.ganho);
+
+  return {totPcs, totMs, nDias, media, horasDia, ops, curva, paradas:par, troca:tro,
+          destaque, destaqueTx, sugestao:cands2[0]||null, outras:cands2.slice(1,3)};
+}
+/* barrinha simples de horas, sem biblioteca, no estilo do resto do app */
+function grafCurva(curva, mediaGeral){
+  if(!curva.length) return '';
+  // se dá pra comparar contra a meta, o eixo é % da meta. senão cai pra pçs/h.
+  const usaPct = curva.filter(c=>c.pct!==null && c.cobertura>=0.7).length >= curva.length*0.6;
+  const val = c => usaPct? (c.pct||0) : c.media;
+  const max=Math.max(...curva.map(val), usaPct?100:mediaGeral, 1);
+  const corte = usaPct? 90 : mediaGeral*0.9;
+  return '<div style="display:flex; align-items:flex-end; gap:6px; height:180px; padding:8px 4px; overflow-x:auto;">'+
+    curva.map(c=>{
+      const v=val(c);
+      const alt=Math.max(6,(v/max)*130);
+      const fraco=v<corte;
+      return '<div style="display:flex; flex-direction:column; align-items:center; min-width:46px;">'+
+        '<div style="font-size:.7rem; font-weight:700;">'+Math.round(v)+(usaPct?'%':'')+'</div>'+
+        '<div style="width:34px; height:'+alt+'px; background:'+(fraco?'#b06b3a':'#3d4d32')+'; border-radius:3px 3px 0 0;" title="'+Math.round(c.pcs)+' peças em '+c.horas.toFixed(1).replace('.',',')+'h · '+Math.round(c.media)+' pçs/h"></div>'+
+        '<div class="mini-info" style="font-size:.65rem;">'+String(c.h).padStart(2,'0')+'h</div></div>';
+    }).join('')+
+    '</div><div class="mini-info">'+(usaPct
+      ? 'Cada hora comparada com o padrão da operação que rodou nela (a meta quando existe, sua própria média quando a operação ainda não tem meta). Assim, pegar uma operação mais lenta não derruba a barra. Barra clara é hora abaixo de 90% do padrão.'
+      : 'Ritmo em pçs/h. Barra clara é hora abaixo de 90% da sua média do período ('+Math.round(mediaGeral)+' pçs/h).')+'</div>';
+}
+/* tabela de operações com barra de meta */
+function tabelaOps(ops){
+  let h='<table><tr><th>Operação</th><th>Peças</th><th>Média</th><th>Meta 100%</th><th>Faixa</th><th>Melhor da célula</th><th>Para subir</th></tr>';
+  ops.forEach(o=>{
+    const barra = o.meta? '<div style="background:#e2e0d6; border-radius:3px; height:8px; width:110px; margin-top:4px;"><div style="height:8px; border-radius:3px; width:'+Math.min(100,Math.round((o.media/o.meta)*100))+'%; background:'+(o.media>=o.meta?'#3d4d32':'#b06b3a')+';"></div></div>' : '';
+    h+='<tr><td><b>'+o.rotulo+'</b>'+barra+'</td><td>'+o.pcs+'</td><td><b>'+Math.round(o.media)+'</b> pçs/h</td>'+
+       '<td>'+(o.meta? Math.round(o.meta) : '—')+'</td>'+
+       '<td><span class="faixa '+o.cls+'"'+(o.margem?' title="subiu de faixa pela margem de apuração"':'')+'>'+o.faixa+'</span></td>'+
+       '<td class="mini-info">'+(o.melhor? o.melhor.nome+' · '+Math.round(o.melhor.rate)+' pçs/h' : '—')+'</td>'+
+       '<td class="mini-info">'+(o.falta||'—')+'</td></tr>';
+  });
+  return h+'</table>';
+}
+function cardSugestao(a){
+  if(!a) return '';
+  let h='<div class="card">';
+  if(a.destaqueTx) h+='<h3 style="margin-top:0;">Seu destaque</h3><div style="margin-bottom:10px;">🏅 '+a.destaqueTx+'</div>';
+  if(a.sugestao){
+    h+='<h3>Onde dá para ganhar mais</h3>'+
+       '<div style="background:#f6f4ea; border-left:4px solid #b06b3a; padding:10px 12px; border-radius:0 6px 6px 0;">'+a.sugestao.txt+'</div>';
+    if(a.outras && a.outras.length) h+='<div class="mini-info" style="margin-top:8px;">Depois dessa: '+a.outras.map(o=>o.tag).join(', ')+'.</div>';
+  } else {
+    h+='<div class="mini-info">Sem ponto de melhora relevante no período. Ritmo está redondo.</div>';
+  }
+  if(a.paradas && a.paradas.n) h+='<div class="mini-info" style="margin-top:8px;">Paradas acima de '+(Number(S.cfg.paradaMin)||10)+' min: <b>'+a.paradas.n+'</b> no período, média de <b>'+Math.round(a.paradas.msDia/60000)+' min por dia</b>.</div>';
+  return h+'</div>';
+}
+
 /* ---- Referência ponderada por grupo (enquanto a meta não existe) ---- */
 const GRUPOS_REF = [
   {teste:id=>/^LATERAL/.test(id), nome:'laterais'}
@@ -3297,15 +3573,43 @@ function refPonderada(opId){
   if(!ms || !pcs) return null;
   return {media: pcs/(ms/3600000), pcs, horas: ms/3600000, grupo:g.nome};
 }
+/* ---- Margem de apuração ----
+   A contagem tem erro real: bipagem perde leitura, peça refugada entra na conta,
+   troca de linha e agulha nem sempre sai do tempo. Então a faixa admite esse erro.
+   Regra: sobe de faixa quem chega a menos de (margem) da meta, no mínimo 1 pç/h.
+   A margem é declarada na tela, nunca escondida. */
+function margemApur(){ const m=Number(S.cfg&&S.cfg.margemApur); return (isNaN(m)||m<0)? 2 : m; }
+function tolDe(meta){ return Math.max(1, meta*(margemApur()/100)); }
 function faixaDe(opKey, rate){
   const [m70,m80,m90,m100]=metasDe(opKey);
   // sem meta definida: NÃO inventa porcentagem. Porcentagem só existe contra a meta 70/80/90/100.
-  if(!m70) return {tx:'meta a definir', cls:''};
-  if(rate>=m100) return {tx:'100%', cls:'fx-100'};
-  if(rate>=m90) return {tx:'90%', cls:'fx-90'};
-  if(rate>=m80) return {tx:'80%', cls:'fx-80'};
-  if(rate>=m70) return {tx:'70%', cls:'fx-70'};
-  return {tx:'Abaixo de 70%', cls:'fx-abx'};
+  if(!m70) return {tx:'meta a definir', cls:'', pct:null, falta:null, alvo:null, alvoTx:'', margem:false};
+  const niveis=[[m100,'100%','fx-100'],[m90,'90%','fx-90'],[m80,'80%','fx-80'],[m70,'70%','fx-70']];
+  const pct = m100? (rate/m100)*100 : null;
+  for(let i=0;i<niveis.length;i++){
+    const [meta,tx,cls]=niveis[i];
+    if(!meta) continue;
+    if(rate>=meta) return {tx, cls, pct, falta:0, alvo:null, alvoTx:'', margem:false,
+                           prox:(i===0? null : niveis[i-1])};
+    if(rate>=meta-tolDe(meta)) return {tx:tx+'*', cls, pct, falta:0, alvo:null, alvoTx:'', margem:true,
+                           prox:(i===0? null : niveis[i-1])};
+  }
+  return {tx:'Abaixo de 70%', cls:'fx-abx', pct, falta:m70-rate, alvo:m70, alvoTx:'70%', margem:false, prox:[m70,'70%','fx-70']};
+}
+/* quanto falta pra próxima faixa, já descontando a margem. devolve texto pronto ou '' */
+function faltaPra(opKey, rate, horas){
+  const [m70,m80,m90,m100]=metasDe(opKey);
+  if(!m70) return '';
+  const niveis=[[m70,'70%'],[m80,'80%'],[m90,'90%'],[m100,'100%']].filter(n=>n[0]);
+  for(const [meta,tx] of niveis){
+    const alvo = meta - tolDe(meta);
+    if(rate < alvo){
+      const dif = alvo - rate;
+      const pcs = horas? Math.ceil(dif*horas) : 0;
+      return 'faltam '+Math.ceil(dif)+' pçs/h para '+tx + (pcs? ' ('+pcs+' peças no período)' : '');
+    }
+  }
+  return 'faixa máxima';
 }
 function baseline(pessoa, opKey){
   const fech=S.ciclos.filter(c=>c.pessoa===pessoa && c.opKey===opKey && c.fim && !c.flag && !c.lote);
@@ -3947,63 +4251,44 @@ function renderMinha(){
   const p=S.pessoas.find(x=>x.id===pessoaLogada);
   if(!p){ box.innerHTML='<div class="card mini-info">Sem cadastro.</div>'; return; }
   const dias=Number((document.getElementById('miDias')||{}).value||30);
-  const desde=dias>=9999? 0 : Date.now()-dias*86400000;
-  const meus=S.ciclos.filter(c=>c.pessoa===p.id && c.fim && c.ini>=desde && !c.flag);
-  if(!meus.length){ box.innerHTML='<div class="card"><h2 style="margin-top:0;">Olá, '+p.nome+'!</h2><div class="mini-info">Ainda não há produção registrada neste período.</div></div>'; return; }
-  const porOp={};
-  meus.forEach(c=>{ const k=(c.opKey||c.op).split('|')[0];
-    if(!porOp[k]) porOp[k]={rotulo:c.rotulo, pcs:0, ms:0};
-    porOp[k].pcs+=qtdEfetiva(c); porOp[k].ms+=tempoUtil(c); });
+  const a=analisePessoa(p.id, dias);
+  if(!a){ box.innerHTML='<div class="card"><h2 style="margin-top:0;">Olá, '+p.nome+'!</h2><div class="mini-info">Ainda não há produção suficiente neste período.</div></div>'; return; }
+
+  let html='<div class="card"><h2 style="margin-top:0;">Olá, '+p.nome+'!</h2>'+
+    '<div style="display:flex; gap:24px; flex-wrap:wrap; margin-top:8px;">'+
+    '<div><div class="mini-info">PEÇAS</div><div style="font-size:1.8rem; font-weight:800;">'+a.totPcs+'</div></div>'+
+    '<div><div class="mini-info">HORAS</div><div style="font-size:1.8rem; font-weight:800;">'+fmtH(a.totMs)+'</div></div>'+
+    '<div><div class="mini-info">MÉDIA</div><div style="font-size:1.8rem; font-weight:800;">'+Math.round(a.media)+' <span style="font-size:.9rem;">pçs/h</span></div></div>'+
+    '<div><div class="mini-info">DIAS</div><div style="font-size:1.8rem; font-weight:800;">'+a.nDias+'</div></div>'+
+    '</div></div>';
+
+  html+=cardSugestao(a);
+
+  html+='<div class="card"><h3 style="margin-top:0;">Sua média por operação</h3>'+tabelaOps(a.ops)+
+    '<div class="mini-info" style="margin-top:8px;">Selo com <b>*</b> quer dizer que a margem de apuração de '+margemApur()+'% subiu você de faixa. A margem existe porque a contagem tem erro.</div></div>';
+
+  html+='<div class="card"><h3 style="margin-top:0;">Seu ritmo por hora do dia</h3>'+grafCurva(a.curva, a.media)+'</div>';
+
+  const meus=ciclosDe(p.id, dias);
   const porDia={};
   meus.forEach(c=>{ const d=fmtData(c.ini); if(!porDia[d]) porDia[d]={pcs:0, ms:0};
     porDia[d].pcs+=qtdEfetiva(c); porDia[d].ms+=tempoUtil(c); });
   const diasArr=Object.entries(porDia).map(([d,g])=>({d, media:g.pcs/(g.ms/3600000), pcs:g.pcs}));
-  const totPcs=meus.reduce((s,c)=>s+qtdEfetiva(c),0);
-  const totMs=meus.reduce((s,c)=>s+tempoUtil(c),0);
-  const mediaGeral=totPcs/(totMs/3600000);
-  const melhor=diasArr.reduce((a,b)=>b.media>a.media?b:a, diasArr[0]);
-
-  let html='<div class="card"><h2 style="margin-top:0;">Olá, '+p.nome+'!</h2>'+
-    '<div style="display:flex; gap:24px; flex-wrap:wrap; margin-top:8px;">'+
-    '<div><div class="mini-info">PEÇAS</div><div style="font-size:1.8rem; font-weight:800;">'+totPcs+'</div></div>'+
-    '<div><div class="mini-info">HORAS</div><div style="font-size:1.8rem; font-weight:800;">'+fmtH(totMs)+'</div></div>'+
-    '<div><div class="mini-info">MÉDIA</div><div style="font-size:1.8rem; font-weight:800;">'+Math.round(mediaGeral)+' <span style="font-size:.9rem;">pçs/h</span></div></div>'+
-    '<div><div class="mini-info">DIAS</div><div style="font-size:1.8rem; font-weight:800;">'+diasArr.length+'</div></div>'+
-    '</div></div>';
-
-  html+='<div class="card"><h3 style="margin-top:0;">Sua média por operação</h3><table>'+
-    '<tr><th>Operação</th><th>Peças</th><th>Média</th><th>Faixa</th><th>Para subir</th></tr>';
-  Object.entries(porOp).sort((a,b)=>b[1].ms-a[1].ms).forEach(([k,g])=>{
-    const md=g.pcs/(g.ms/3600000);
-    const f=faixaDe(k, md);
-    const [m70,m80,m90,m100]=metasDe(k);
-    let prox='—';
-    if(m70){
-      if(md<m70) prox='faltam '+Math.ceil(m70-md)+' p/ 70%';
-      else if(md<m80) prox='faltam '+Math.ceil(m80-md)+' p/ 80%';
-      else if(md<m90) prox='faltam '+Math.ceil(m90-md)+' p/ 90%';
-      else if(md<m100) prox='faltam '+Math.ceil(m100-md)+' p/ 100%';
-      else prox='faixa máxima!';
-    }
-    html+='<tr><td><b>'+g.rotulo+'</b></td><td>'+g.pcs+'</td><td><b>'+Math.round(md)+'</b> pçs/h</td>'+
-      '<td><span class="faixa '+f.cls+'">'+f.tx+'</span></td><td class="mini-info">'+prox+'</td></tr>';
-  });
-  html+='</table></div>';
-
-  html+='<div class="card"><h3 style="margin-top:0;">Seu melhor dia</h3>'+
-    '<div>🏆 <b>'+melhor.d+'</b> · '+Math.round(melhor.media)+' pçs/h · '+melhor.pcs+' peças</div></div>';
-
-  const max=Math.max(...diasArr.map(d=>d.media),1);
-  html+='<div class="card"><h3 style="margin-top:0;">Seu ritmo dia a dia (pçs/h)</h3>'+
-    '<div style="display:flex; align-items:flex-end; gap:6px; height:170px; padding:8px; overflow-x:auto;">'+
-    diasArr.map(d=>{
-      const alt=Math.max(6, (d.media/max)*130);
-      return '<div style="display:flex; flex-direction:column; align-items:center; min-width:44px;">'+
-        '<div style="font-size:.7rem; font-weight:700;">'+Math.round(d.media)+'</div>'+
-        '<div style="width:34px; height:'+alt+'px; background:#3d4d32; border-radius:3px 3px 0 0;"></div>'+
-        '<div class="mini-info" style="font-size:.65rem;">'+d.d.slice(0,5)+'</div></div>';
-    }).join('')+'</div></div>';
-
+  if(diasArr.length){
+    const melhor=diasArr.reduce((x,y)=>y.media>x.media?y:x, diasArr[0]);
+    html+='<div class="card"><h3 style="margin-top:0;">Seu melhor dia</h3>'+
+      '<div>🏆 <b>'+melhor.d+'</b> · '+Math.round(melhor.media)+' pçs/h · '+melhor.pcs+' peças</div></div>';
+    const max=Math.max(...diasArr.map(d=>d.media),1);
+    html+='<div class="card"><h3 style="margin-top:0;">Seu ritmo dia a dia (pçs/h)</h3>'+
+      '<div style="display:flex; align-items:flex-end; gap:6px; height:170px; padding:8px; overflow-x:auto;">'+
+      diasArr.map(d=>{
+        const alt=Math.max(6, (d.media/max)*130);
+        return '<div style="display:flex; flex-direction:column; align-items:center; min-width:44px;">'+
+          '<div style="font-size:.7rem; font-weight:700;">'+Math.round(d.media)+'</div>'+
+          '<div style="width:34px; height:'+alt+'px; background:#3d4d32; border-radius:3px 3px 0 0;"></div>'+
+          '<div class="mini-info" style="font-size:.65rem;">'+d.d.slice(0,5)+'</div></div>';
+      }).join('')+'</div></div>';
+  }
   box.innerHTML=html;
 }
 function aplicarPerfil(){
@@ -5365,20 +5650,19 @@ function renderRelat(){
     totPcs+=g.pcs; totMs+=g.ms;
     const media=g.pcs/(g.ms/3600000);
     const fx=faixaDe(k,media);
-    const [m70,m80,m90,m100]=metasDe(k);
+    const [m70]=metasDe(k);
     let sobe='—';
-    if(m70){
-      if(media<m70) sobe='faltam '+Math.ceil(m70-media)+' p/ 70%';
-      else if(media<m80) sobe='faltam '+Math.ceil(m80-media)+' p/ 80%';
-      else if(media<m90) sobe='faltam '+Math.ceil(m90-media)+' p/ 90%';
-      else if(media<m100) sobe='faltam '+Math.ceil(m100-media)+' p/ 100%';
-      else sobe='no topo 🏆';
-    }
+    if(m70){ const f=faltaPra(k, media, g.ms/3600000); sobe=(f==='faixa máxima')?'no topo 🏆':f; }
     const minPeca=g.pcs>0? (g.ms/60000/g.pcs).toFixed(2).replace('.',',') : '—';
     html+='<tr><td><b>'+g.rotulo+'</b></td><td>'+g.dias.size+'</td><td>'+fmtH(g.ms)+'</td><td>'+g.pcs+'</td><td><b>'+Math.round(media)+'</b></td><td>'+minPeca+'</td><td><span class="faixa '+fx.cls+'">'+fx.tx+'</span></td><td>'+sobe+'</td></tr>';
   });
   const minPecaTot=totPcs>0? (totMs/60000/totPcs).toFixed(2).replace('.',',') : '—';
   html+='<tr><td><b>TOTAL PRODUÇÃO</b></td><td></td><td><b>'+fmtH(totMs)+'</b></td><td><b>'+totPcs+'</b></td><td><b>'+Math.round(totPcs/(totMs/3600000))+'</b></td><td><b>'+minPecaTot+'</b></td><td></td><td></td></tr></table></div>';
+  const anl=analisePessoa(pid, dias);
+  if(anl){
+    html+=cardSugestao(anl);
+    html+='<div class="card"><h3 style="margin-top:0;">Ritmo por hora do dia</h3>'+grafCurva(anl.curva, anl.media)+'</div>';
+  }
   // horas por tipo
   const hCons=horasPausaTipo(ciclos,'CONSERTO'), hMaq=horasPausaTipo(ciclos,'MAQUINA'), hMat=horasPausaTipo(ciclos,'MATERIAL'), hPes=horasPausaTipo(ciclos,'PESSOAL');
   html+='<div class="card"><h3 style="margin-top:0;">Horas fora da produção</h3><table>'+
@@ -5468,19 +5752,20 @@ function resumoDiaPessoa(pid){
   const key=principal[0], g=principal[1];
   const mediaOp=g.pcs/(g.ms/3600000);
   const fx=faixaDe(key, mediaOp);
-  const [m70,m80,m90,m100]=metasDe(key);
+  const [m70]=metasDe(key);
+  const hPrinc=g.ms/3600000;
   let prox='';
   if(m70){
-    if(mediaOp<m70) prox='Faltam '+Math.ceil(m70-mediaOp)+' pçs/h para os 70%.';
-    else if(mediaOp<m80) prox='Faltam '+Math.ceil(m80-mediaOp)+' pçs/h para os 80%.';
-    else if(mediaOp<m90) prox='Faltam '+Math.ceil(m90-mediaOp)+' pçs/h para os 90%.';
-    else if(mediaOp<m100) prox='Faltam '+Math.ceil(m100-mediaOp)+' pçs/h para os 100%.';
-    else prox='Você está na faixa máxima. Excelente trabalho!';
+    const f=faltaPra(key, mediaOp, hPrinc);
+    prox = (f==='faixa máxima')? 'Você está na faixa máxima. Excelente trabalho!'
+                               : 'Para subir: '+f+'.';
   }
   const todasOps=Object.entries(porOp).sort((a,b)=>b[1].ms-a[1].ms).map(([k,o])=>{
-    const md=o.pcs/(o.ms/3600000);
+    const h=o.ms/3600000;
+    const md=o.pcs/h;
     const f=faixaDe(k, md);
-    return {rotulo:o.rotulo, pcs:o.pcs, media:Math.round(md), faixa:f.tx, faixaCls:f.cls};
+    return {rotulo:o.rotulo, pcs:o.pcs, media:Math.round(md), horas:h,
+            faixa:f.tx, faixaCls:f.cls, margem:f.margem, falta:faltaPra(k, md, h)};
   });
   return {pcs, pacotes:fech.length, media, rotulo:g.rotulo, mediaOp, faixa:fx.tx, prox, dias, todasOps};
 }
@@ -5490,7 +5775,13 @@ function msgDiaPessoa(p, r){
                      : 'Resumo de '+rotuloPeriodo();
   let ops='';
   if(r.todasOps && r.todasOps.length>1){
-    ops='\nPor operação:\n'+r.todasOps.map(o=>'  • '+o.rotulo+': '+o.pcs+' pçs · '+o.media+' pçs/h'+(o.faixa&&o.faixa!=='meta a definir'? ' ('+o.faixa+')':'')).join('\n')+'\n';
+    ops='\nPor operação:\n'+r.todasOps.map(o=>'  • '+o.rotulo+': '+o.pcs+' pçs · '+o.media+' pçs/h'+(o.faixa&&o.faixa!=='meta a definir'? ' ('+o.faixa+')':'')+((o.falta&&o.falta!=='faixa máxima')? ' · '+o.falta : '')).join('\n')+'\n';
+  }
+  const a=analisePessoa(p.id, 30);
+  let extra='';
+  if(a){
+    if(a.destaqueTx) extra+='\n\nSeu destaque: '+a.destaqueTx;
+    if(a.sugestao) extra+='\n\nOnde dá para ganhar mais (olhando os últimos 30 dias):\n'+a.sugestao.txt;
   }
   return 'Borinelli Confecções · '+cab+'\n\n'+
     'Olá, '+p.nome+'!\n'+
@@ -5498,7 +5789,7 @@ function msgDiaPessoa(p, r){
     ops+
     'Operação principal: '+r.rotulo+'\n'+
     'Média: '+Math.round(r.mediaOp)+' pçs/h · Faixa '+r.faixa+'\n'+
-    r.prox+'\n\nObrigado pelo empenho!';
+    r.prox+extra+'\n\nObrigado pelo empenho!';
 }
 function renderEnvioDia(){
   const per=rotuloPeriodo();
@@ -5513,8 +5804,9 @@ function renderEnvioDia(){
     btns.push('<button class="acao mini sec" onclick="copiarMsg(\''+p.id+'\')">📋 Copiar</button>');
     if(p.fone) btns.push('<a class="acao mini" style="text-decoration:none; display:inline-block; background:#25D366;" target="_blank" href="https://wa.me/55'+p.fone+'?text='+msg+'">WhatsApp</a>');
     const listaOps=(r.todasOps||[]).map(o=>{
-      const fx=o.faixa? '<span class="faixa '+o.faixaCls+'">'+o.faixa+'</span>' : '';
-      return '<div style="padding:2px 0;">'+o.rotulo+': <b>'+o.pcs+'</b> pçs · <b>'+o.media+'</b> pçs/h '+fx+'</div>';
+      const fx=o.faixa? '<span class="faixa '+o.faixaCls+'"'+(o.margem?' title="subiu de faixa pela margem de apuração"':'')+'>'+o.faixa+'</span>' : '';
+      const gap=(o.falta && o.falta!=='faixa máxima')? '<div class="mini-info" style="font-size:.68rem;">'+o.falta+'</div>' : '';
+      return '<div style="padding:3px 0;">'+o.rotulo+': <b>'+o.pcs+'</b> pçs · <b>'+o.media+'</b> pçs/h '+fx+gap+'</div>';
     }).join('');
     html+='<tr><td><b>'+p.nome+'</b></td><td><b>'+r.pcs+'</b></td><td>'+listaOps+'</td><td style="white-space:nowrap; vertical-align:top;">'+btns.join(' ')+'</td></tr>';
   });
@@ -6291,6 +6583,22 @@ function renderDiaDia(){
   }
   box.innerHTML=html;
 }
+/* se a maioria da célula não bate a mesma meta, o problema costuma ser a meta */
+function metaSuspeita(opId){
+  const [m70,m80]=metasDe(opId); if(!m80) return null;
+  const por={};
+  S.ciclos.forEach(c=>{
+    if(!c.fim || c.flag || c.lote) return;
+    if(opBaseDe(c)!==opId) return;
+    if(!por[c.pessoa]) por[c.pessoa]={pcs:0, ms:0};
+    por[c.pessoa].pcs+=qtdEfetiva(c); por[c.pessoa].ms+=tempoUtil(c);
+  });
+  const gente=Object.values(por).filter(g=>g.ms/3600000>=3);
+  if(gente.length<3) return null;
+  const abaixo=gente.filter(g=>(g.pcs/(g.ms/3600000)) < m80 - tolDe(m80)).length;
+  if(abaixo/gente.length > 0.5) return {abaixo, tot:gente.length};
+  return null;
+}
 function renderCalibra(){
   const semMeta=S.opsBase.filter(o=>!o.metas || !o.metas[0]);
   const comDados=semMeta.map(o=>({op:o, d:dadosOp(o.id), sug:metasSugeridas(o.id)})).filter(x=>x.d.horas>0);
@@ -6336,7 +6644,9 @@ function renderCalibra(){
     html+='<tr><td colspan="5" style="padding-top:12px;"><b class="mini-info">JÁ TÊM META (real x meta)</b></td></tr>';
     comMeta.sort((a,b)=>b.d.horas-a.d.horas).forEach(({op,d})=>{
       const f=faixaDe(op.id, d.media);
-      html+='<tr><td>'+op.nome+'</td>'+
+      const sus=metaSuspeita(op.id);
+      const susTx = sus? '<div class="mini-info" style="color:#a33;">⚠️ '+sus.abaixo+' de '+sus.tot+' pessoas ficam abaixo de 80% aqui. Meta provavelmente apertada demais, vale revisar.</div>' : '';
+      html+='<tr><td>'+op.nome+susTx+'</td>'+
         '<td class="mini-info">'+d.diasValidos+' dia(s) · '+d.horas.toFixed(1)+'h</td>'+
         '<td><b>'+Math.round(d.media)+'</b> pçs/h</td>'+
         '<td>'+op.metas.join(' / ')+' <span class="faixa '+f.cls+'">'+f.tx+'</span></td>'+
@@ -6503,6 +6813,10 @@ function preencherCfg(){
   const ce=document.getElementById('cfgEmpac'); if(ce) ce.value=S.cfg.empacadoMin||45;
   const ca=document.getElementById('cfgAuto'); if(ca) ca.value=S.cfg.autoConfirm||0;
   const cs=document.getElementById('cfgSom'); if(cs) cs.value=(S.cfg.somVibra===false)?'nao':'sim';
+  const cm=document.getElementById('cfgMargem'); if(cm) cm.value=(S.cfg.margemApur===undefined?2:S.cfg.margemApur);
+  const cpd=document.getElementById('cfgParada'); if(cpd) cpd.value=S.cfg.paradaMin||10;
+  const cai=document.getElementById('cfgAlmIni'); if(cai) cai.value=S.cfg.almocoIni||'11:30';
+  const caf=document.getElementById('cfgAlmFim'); if(caf) caf.value=S.cfg.almocoFim||'13:00';
 }
 function salvarCfg(){
   if(!autorizado()) return;
@@ -6510,7 +6824,11 @@ function salvarCfg(){
   const ca=document.getElementById('cfgAuto'), cs=document.getElementById('cfgSom');
   S.cfg=Object.assign({}, S.cfg, {ini:cfgIni.value, fim:cfgFim.value, fimSex:cfgFimSex.value, cafeIni:cfgCafeIni.value, cafeFim:cfgCafeFim.value,
     cafeTol:Number(cfgCafeTol.value), troca:Number(cfgTroca.value), anom:Number(cfgAnom.value), filaBaixa:Number(cfgFila.value),
-    empacadoMin:Number(ce&&ce.value)||45, autoConfirm:Math.max(0,Number(ca&&ca.value)||0), somVibra:(cs&&cs.value==='nao')?false:true});
+    empacadoMin:Number(ce&&ce.value)||45, autoConfirm:Math.max(0,Number(ca&&ca.value)||0), somVibra:(cs&&cs.value==='nao')?false:true,
+    margemApur:Math.max(0,Number((document.getElementById('cfgMargem')||{}).value)||0),
+    paradaMin:Math.max(3,Number((document.getElementById('cfgParada')||{}).value)||10),
+    almocoIni:((document.getElementById('cfgAlmIni')||{}).value)||'11:30',
+    almocoFim:((document.getElementById('cfgAlmFim')||{}).value)||'13:00'});
   salvarTudo(); alert('Regras salvas.');
 }
 function addOpBase(){
@@ -6606,7 +6924,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.40.0';
+const VERSAO = '3.41.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
