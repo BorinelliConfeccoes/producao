@@ -4331,7 +4331,37 @@ function lerPlanilhaProducao(wb, nomeArquivo){
     }
     if(pecas>0 && horas>0) lanc.push({pessoa, data, opTxt:String(opTxt).trim(), pecas, horas});
   }
-  return {pessoa, lanc, ausencias};
+  // lê a tabelinha de faixas (70/80/90/100) que fica embaixo, se existir.
+  // formato: uma linha com cabeçalho 0.7/0.8/0.9/1 (ou 70/80/90/100), e abaixo linhas por função.
+  const faixas=[];
+  let rCab=-1;
+  for(let i=0;i<g.length;i++){
+    const row=(g[i]||[]).map(x=> typeof x==='number'? x : normOp(x));
+    // cabeçalho: tem 0.7 e 1 (ou 70 e 100) na mesma linha
+    const nums=row.filter(x=>typeof x==='number');
+    const temPcts = (nums.includes(0.7)||nums.includes(70)) && (nums.includes(1)||nums.includes(100)) && (nums.includes(0.8)||nums.includes(80));
+    if(temPcts){ rCab=i; break; }
+  }
+  if(rCab>=0){
+    // acha as colunas dos 4 percentuais no cabeçalho
+    const cab=g[rCab]||[];
+    let c70=-1,c80=-1,c90=-1,c100=-1;
+    cab.forEach((v,c)=>{
+      if(v===0.7||v===70) c70=c; else if(v===0.8||v===80) c80=c;
+      else if(v===0.9||v===90) c90=c; else if(v===1||v===100) c100=c;
+    });
+    // linhas abaixo: função + 4 valores
+    for(let i=rCab+1;i<Math.min(rCab+8,g.length);i++){
+      const row=g[i]||[];
+      const nomeF=row.find(x=>typeof x==='string' && normOp(x).length>1);
+      if(!nomeF) continue;
+      const m70=Number(row[c70]),m80=Number(row[c80]),m90=Number(row[c90]),m100=Number(row[c100]);
+      if([m70,m80,m90,m100].every(n=>isFinite(n)&&n>0)){
+        faixas.push({funcao:String(nomeF).trim(), metas:[m70,m80,m90,m100]});
+      }
+    }
+  }
+  return {pessoa, lanc, ausencias, faixas};
 }
 function importarPlanilhaClick(){
   if(!autorizado()) return;
@@ -4369,7 +4399,7 @@ async function importarPlanilha(files){
   if(typeof XLSX==='undefined') return alert('A biblioteca de Excel não carregou. Confira a internet e recarregue a página.');
   try{
     const escolhida=_pessoaImport; _pessoaImport=null;
-    let todos=[], semPessoa=[], ausenciasTodas=[];
+    let todos=[], semPessoa=[], ausenciasTodas=[], faixasTodas=[];
     for(const file of files){
       const buf=await file.arrayBuffer();
       const wb=XLSX.read(buf,{type:'array', cellDates:true});
@@ -4383,6 +4413,7 @@ async function importarPlanilha(files){
       }
       r.lanc.forEach(l=>{ l.pessoaId=pid; l.pessoa=pnome; todos.push(l); });
       (r.ausencias||[]).forEach(a=>{ a.pessoaId=pid; ausenciasTodas.push(a); });
+      (r.faixas||[]).forEach(f=>{ faixasTodas.push(f); });
     }
     // registra as faltas/atestados/atrasos/saídas lidos da planilha
     if(ausenciasTodas.length) registrarAusencias(ausenciasTodas);
@@ -4395,7 +4426,7 @@ async function importarPlanilha(files){
     // mapeamento das operações da planilha -> operações do sistema
     S.mapaOps=S.mapaOps||{};
     const siglas=[...new Set(todos.map(l=>normOp(l.opTxt)))];
-    _impPendente={todos, siglas};
+    _impPendente={todos, siglas, faixas:faixasTodas};
     abrirMapaOps(siglas, todos);
   }catch(e){ alert('Não consegui ler a planilha: '+e.message); }
 }
@@ -4478,7 +4509,7 @@ function checarMapaRepetido(){
 }
 function confirmarMapaOps(){
   if(!_impPendente) return;
-  const {todos, siglas}=_impPendente;
+  const {todos, siglas, faixas}=_impPendente;
   const nomeOriginal={};
   todos.forEach(l=>{ const k=normOp(l.opTxt); if(!nomeOriginal[k]) nomeOriginal[k]=l.opTxt; });
   const criadas=[];
@@ -4486,7 +4517,6 @@ function confirmarMapaOps(){
     const el=document.getElementById('mapa-'+s.replace(/[^A-Z0-9]/g,'_'));
     if(!el) return;
     if(el.value==='__criar__'){
-      // cria a operação com o nome que veio da planilha
       const nome=nomeOriginal[s]||s;
       const idDe=t=>t.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,'');
       let id=idDe(nome)||'OP';
@@ -4497,6 +4527,17 @@ function confirmarMapaOps(){
       S.mapaOps[s]=el.value;
     }
   });
+  // aplica as faixas lidas da tabelinha da planilha nas operações mapeadas.
+  // casa o nome da função (ex "Barra") com a sigla mapeada (ex "BAINHA DE BARRA").
+  if(faixas && faixas.length){
+    faixas.forEach(f=>{
+      const fn=normOp(f.funcao);
+      // acha a sigla da planilha que contém o nome da função (Barra → BAINHA DE BARRA)
+      const sig=siglas.find(s=> s.includes(fn) || fn.includes(s) || s.split(' ').some(w=>w===fn));
+      const opId = sig? S.mapaOps[sig] : null;
+      if(opId){ S.metasVar=S.metasVar||{}; S.metasVar[opId]=f.metas; }
+    });
+  }
   ocultarModais();
   gravarImportacao(todos, criadas);
   _impPendente=null;
@@ -5797,6 +5838,42 @@ function setPresenca(ym, pid, campo, valor){
   salvarTudo(); renderPremios();
 }
 // calcula assiduidade e produção de uma pessoa num mês
+// percentual de produção da pessoa no mês, pelo ritmo real em cada operação vs as faixas dela
+function pctProducaoPorRitmo(ym, pid){
+  const [y,mo]=ym.split('-').map(Number);
+  // agrupa horas e peças por operação
+  const porOp={};
+  S.ciclos.forEach(c=>{
+    if(!c.fim || c.flag || c.pessoa!==pid) return;
+    const d=new Date(c.ini);
+    if(d.getFullYear()!==y || d.getMonth()!==mo-1) return;
+    const base=(c.opKey||c.op||'').split('|')[0];
+    if(!porOp[base]) porOp[base]={pcs:0, ms:0};
+    porOp[base].pcs+=qtdEfetiva(c); porOp[base].ms+=tempoUtil(c);
+  });
+  // pra cada operação: ritmo → percentual pela faixa daquela operação
+  let somaPct=0, somaPeso=0, semMeta=[];
+  Object.entries(porOp).forEach(([base,g])=>{
+    const h=g.ms/3600000; if(h<=0) return;
+    const ritmo=g.pcs/h;
+    const metas=metasDe(base);   // [m70,m80,m90,m100]
+    if(!metas || !metas[3]){ semMeta.push(base); return; }   // operação sem faixa cadastrada
+    const pct=pctDoRitmo(ritmo, metas);
+    somaPct+=pct*h; somaPeso+=h;   // pondera pelas horas
+  });
+  if(somaPeso<=0) return {pct:0, semMeta};
+  return {pct:Math.round(somaPct/somaPeso), semMeta};
+}
+// converte um ritmo (pçs/h) no percentual, interpolando entre as faixas
+function pctDoRitmo(ritmo, metas){
+  const [m70,m80,m90,m100]=metas;
+  if(ritmo>=m100) return 100;
+  if(ritmo>=m90)  return 90 + (ritmo-m90)/(m100-m90)*10;
+  if(ritmo>=m80)  return 80 + (ritmo-m80)/(m90-m80)*10;
+  if(ritmo>=m70)  return 70 + (ritmo-m70)/(m80-m70)*10;
+  // abaixo de 70%: proporcional até 0
+  return Math.max(0, Math.round(ritmo/m70*70));
+}
 function calcularPremio(ym, pid, metaMensalCamisetas){
   const pres=presencaDe(ym, pid);
   // --- ASSIDUIDADE ---
@@ -5810,10 +5887,13 @@ function calcularPremio(ym, pid, metaMensalCamisetas){
   else if(atestados>=2){ assid=0; motivoAssid=atestados+' atestados'; }
   else if(atestados===1){ assid=PREMIO_ASSIDUIDADE*0.5; motivoAssid='1 atestado (-50%)'; }
   // --- PRODUÇÃO ---
-  // percentual real de produção no mês (sobre os dias trabalhados), aplicado na tabela.
+  // percentual real medido pelo RITMO da pessoa em cada operação, comparado com as faixas
+  // (pçs/h) daquela operação. Uma pessoa faz várias operações → média ponderada pelas horas.
   // atestado não afeta produção. falta injustificada zera. atrasos/saídas limitam o teto.
   const prod=producaoPessoaMes(ym, pid);
-  let pctProd = metaMensalCamisetas>0? Math.round(prod.pcs / (metaMensalCamisetas*prod.diasTrab/diasUteisMes(ym)) *100) : 0;
+  const pr=pctProducaoPorRitmo(ym, pid);
+  let pctProd = pr.pct;
+  const opsSemMeta = pr.semMeta||[];
   // teto por atrasos e saídas
   let teto=100;
   if(pres.atrasos>=2) teto=Math.min(teto,80);
@@ -5832,7 +5912,7 @@ function calcularPremio(ym, pid, metaMensalCamisetas){
   if(ov.assid!=null && ov.assid!==''){ assidFinal=Number(ov.assid)||0; ajustado=true; }
   if(ov.prod!=null && ov.prod!==''){ prodFinal=Number(ov.prod)||0; ajustado=true; }
   return {assid:assidFinal, assidCalc, motivoAssid, pctProd, pctFinal, teto,
-          premioProd:prodFinal, prodCalc, faixaProd:premioProd.faixa, motivoProd,
+          premioProd:prodFinal, prodCalc, faixaProd:premioProd.faixa, motivoProd, opsSemMeta,
           ajustado, motivoAjuste:ov.motivo||'',
           dias:prod.diasTrab, pcs:prod.pcs, total:assidFinal+prodFinal};
 }
@@ -5933,7 +6013,8 @@ function renderPremios(){
       '<td>'+inp('atestados',pres.atestados)+'</td>'+
       '<td>'+inp('atrasos',pres.atrasos)+'</td>'+
       '<td>'+inp('saidas',pres.saidas)+'</td>'+
-      '<td>'+r.pctFinal+'%'+(r.teto<100?' <span class="mini-info">(teto '+r.teto+'%)</span>':'')+'</td>'+
+      '<td>'+r.pctFinal+'%'+(r.teto<100?' <span class="mini-info">(teto '+r.teto+'%)</span>':'')+
+        (r.opsSemMeta && r.opsSemMeta.length? ' <span title="Operações sem faixa cadastrada, ficaram de fora do %: '+r.opsSemMeta.join(', ')+'" style="cursor:help; color:#b23b3b;">⚠</span>':'')+'</td>'+
       cell(r.assid, r.assidCalc, r.motivoAssid, '#f5faf0')+
       cell(r.premioProd, r.prodCalc, r.faixaProd?r.faixaProd+'%':'', '#fdf9f0')+
       '<td><b>R$ '+r.total.toFixed(0)+'</b></td>'+
@@ -6525,7 +6606,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.38.2';
+const VERSAO = '3.40.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -6631,7 +6712,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, setOverride, limparOverride, ajustarPremio});
+Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, pctProducaoPorRitmo, pctDoRitmo, setOverride, limparOverride, ajustarPremio});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
