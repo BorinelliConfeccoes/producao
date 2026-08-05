@@ -4581,7 +4581,8 @@ function lerPlanilhaProducao(wb, nomeArquivo){
   for(let i=0;i<=rData+1 && !pessoa;i++) (g[i]||[]).forEach((v,j)=>{
     if(!pessoa && typeof v==='string' && nomesConhecidos.includes(normOp(v))) pessoa=String(v).trim();
   });
-  if(!pessoa){ const base=String(nomeArquivo||'').replace(/\.[^.]+$/,''); if(base) pessoa=base.trim(); }
+  let pessoaFonte = pessoa? 'planilha' : '';
+  if(!pessoa){ const base=String(nomeArquivo||'').replace(/\.[^.]+$/,''); if(base){ pessoa=base.trim(); pessoaFonte='arquivo'; } }
   // varre as colunas
   const lanc=[];
   const ausencias=[];
@@ -4646,13 +4647,13 @@ function lerPlanilhaProducao(wb, nomeArquivo){
       }
     }
   }
-  return {pessoa, lanc, ausencias, faixas};
+  return {pessoa, pessoaFonte, lanc, ausencias, faixas};
 }
 function importarPlanilhaClick(){
   if(!autorizado()) return;
   if(!S.pessoas.length) return alert('Cadastre as pessoas primeiro em Ajustes → Pessoas.');
   const lista=S.pessoas.map((p,i)=>(i+1)+' = '+p.nome).join('\n');
-  const r=prompt('De quem é a planilha que você vai importar?\n\n'+lista+'\n\nDigite o número (ou 0 para o sistema tentar identificar sozinho pelo arquivo):','');
+  const r=prompt('De quem é a planilha que você vai importar?\n\n'+lista+'\n\nDigite o número, ou 0 para o sistema identificar pelo nome da planilha (mais seguro).\nSe você escolher um número e a planilha estiver em outro nome, eu aviso antes de importar.','');
   if(r===null) return;
   const n=Number(r);
   if(n===0){ _pessoaImport=null; }
@@ -4684,14 +4685,32 @@ async function importarPlanilha(files){
   if(typeof XLSX==='undefined') return alert('A biblioteca de Excel não carregou. Confira a internet e recarregue a página.');
   try{
     const escolhida=_pessoaImport; _pessoaImport=null;
-    let todos=[], semPessoa=[], ausenciasTodas=[], faixasTodas=[];
+    let todos=[], semPessoa=[], ausenciasTodas=[], faixasTodas=[], pulados=[];
     for(const file of files){
       const buf=await file.arrayBuffer();
       const wb=XLSX.read(buf,{type:'array', cellDates:true});
       const r=lerPlanilhaProducao(wb, file.name);
       if(!r.lanc.length && !(r.ausencias||[]).length) continue;
       let pid, pnome;
-      if(escolhida){ pid=escolhida.id; pnome=escolhida.nome; }
+      if(escolhida){
+        // CONFERÊNCIA: o nome escolhido na lista tem que bater com o nome da planilha.
+        // Sem isso, escolher a pessoa errada joga a produção de uma na média da outra
+        // e não tem nada na tela que denuncie o erro depois.
+        const naPlanilha = S.pessoas.find(p=>normOp(p.nome)===normOp(r.pessoa));
+        const fonteTx = r.pessoaFonte==='planilha'? 'nome escrito dentro da planilha' : 'nome do arquivo';
+        if(naPlanilha && naPlanilha.id!==escolhida.id){
+          if(!confirm('CONFERE ISSO ANTES DE SEGUIR\n\n'+
+            'Você escolheu: '+escolhida.nome+'\n'+
+            'A planilha "'+file.name+'" está no nome de: '+naPlanilha.nome+'\n'+
+            '(pelo '+fonteTx+')\n\n'+
+            'Se continuar, a produção de '+naPlanilha.nome+' vai entrar na média de '+escolhida.nome+' e não dá pra separar depois.\n\n'+
+            'Continuar mesmo assim?')){ pulados.push(file.name+' (é de '+naPlanilha.nome+')'); continue; }
+        } else if(!naPlanilha && r.pessoa && r.pessoaFonte==='planilha' && normOp(r.pessoa)!==normOp(escolhida.nome)){
+          if(!confirm('A planilha "'+file.name+'" traz o nome "'+r.pessoa+'", que não é ninguém cadastrado.\n\n'+
+            'Você escolheu '+escolhida.nome+'. Importar como sendo dela?')){ pulados.push(file.name+' (nome "'+r.pessoa+'" não confere)'); continue; }
+        }
+        pid=escolhida.id; pnome=escolhida.nome;
+      }
       else {
         const achou=S.pessoas.find(p=>normOp(p.nome)===normOp(r.pessoa));
         if(achou){ pid=achou.id; pnome=achou.nome; } else { semPessoa.push(r.pessoa||file.name); continue; }
@@ -4702,12 +4721,14 @@ async function importarPlanilha(files){
     }
     // registra as faltas/atestados/atrasos/saídas lidos da planilha
     if(ausenciasTodas.length) registrarAusencias(ausenciasTodas);
+    if(pulados.length) alert('Não importei '+pulados.length+' planilha(s) porque o nome não bateu:\n\n• '+pulados.join('\n• ')+'\n\nImporte cada uma escolhendo a pessoa certa.');
     if(semPessoa.length && !todos.length && !ausenciasTodas.length) return alert('Não reconheci a pessoa: '+[...new Set(semPessoa)].join(', ')+'.\n\nEscolha a pessoa na lista ao importar, ou cadastre com esse mesmo nome em Ajustes → Pessoas.');
     if(!todos.length){
       if(ausenciasTodas.length){ salvarTudo(); renderTudo(); return alert('Planilha só tinha faltas/atestados. Registrei '+ausenciasTodas.length+' evento(s) de presença. Veja em Relatórios → Prêmios.'); }
       return alert('Não encontrei lançamentos nessas planilhas. Confira se elas têm as linhas de data, operação e HORAS.');
     }
-    if(escolhida && files.length>1 && !confirm('Você escolheu '+escolhida.nome+'.\n\nTodas as '+files.length+' planilhas selecionadas vão ser importadas como sendo dela. Continuar?')) return;
+    const nArquivos=files.length-pulados.length;
+    if(escolhida && nArquivos>1 && !confirm('Você escolheu '+escolhida.nome+'.\n\nAs '+nArquivos+' planilhas restantes vão ser importadas como sendo dela. Continuar?')) return;
     // mapeamento das operações da planilha -> operações do sistema
     S.mapaOps=S.mapaOps||{};
     const siglas=[...new Set(todos.map(l=>normOp(l.opTxt)))];
@@ -5802,6 +5823,7 @@ function renderEnvioDia(){
     const msg=encodeURIComponent(msgDiaPessoa(p,r));
     const btns=[];
     btns.push('<button class="acao mini sec" onclick="copiarMsg(\''+p.id+'\')">📋 Copiar</button>');
+    btns.push('<button class="acao mini sec" onclick="verAnalise(\''+p.id+'\')">📈 Ver análise</button>');
     if(p.fone) btns.push('<a class="acao mini" style="text-decoration:none; display:inline-block; background:#25D366;" target="_blank" href="https://wa.me/55'+p.fone+'?text='+msg+'">WhatsApp</a>');
     const listaOps=(r.todasOps||[]).map(o=>{
       const fx=o.faixa? '<span class="faixa '+o.faixaCls+'"'+(o.margem?' title="subiu de faixa pela margem de apuração"':'')+'>'+o.faixa+'</span>' : '';
@@ -5817,6 +5839,16 @@ function renderEnvioDia(){
   const box=document.getElementById('tabEnvio');
   if(document.getElementById('envCab')) document.getElementById('envCab').innerHTML=cab;
   else if(box){ const d=document.createElement('div'); d.id='envCab'; d.innerHTML=cab; box.parentNode.insertBefore(d, box); }
+}
+/* leva direto pro gráfico e pra sugestão da pessoa, sem ter que caçar a aba */
+function verAnalise(pid){
+  const btn=document.querySelector('.subtabs[data-grupo="relat"] button[data-s="individual"]');
+  if(btn) btn.click();
+  const sel=document.getElementById('rPessoa');
+  if(sel){ sel.value=pid; if(sel.value!==pid){ renderTudo(); sel.value=pid; } }
+  if(typeof renderRelat==='function') renderRelat();
+  const out=document.getElementById('relatOut');
+  if(out && out.scrollIntoView) out.scrollIntoView({behavior:'smooth', block:'start'});
 }
 function copiarParaArea(txt){
   if(navigator.clipboard && navigator.clipboard.writeText){
@@ -6924,7 +6956,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.41.0';
+const VERSAO = '3.42.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
