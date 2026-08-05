@@ -3089,13 +3089,31 @@ const CFG_PADRAO = {ini:'05:00', fim:'14:30', fimSex:'13:30', cafeIni:'08:30', c
 /* ---- Mescla de estados (dois aparelhos podem bipar ao mesmo tempo) ----
    Antes: quem salvasse por último apagava o do outro. Agora os dois se juntam. ---- */
 function _tomb(o){ o.removidos=o.removidos||{ciclos:[],ordens:[],pessoas:[]}; return o.removidos; }
+/* A lápide guarda QUANDO o registro foi apagado. Sem isso, um id apagado ficava
+   morto pra sempre: como o lançamento de planilha usa id fixo (pessoa+data+operação),
+   reimportar recriava o mesmo id e a próxima sincronização matava tudo de novo,
+   em silêncio. Agora o registro recriado DEPOIS da remoção sobrevive. */
+let _tombLegado=0;
+function _tombNorm(arr){
+  return (arr||[]).map(x => (x && typeof x==='object')
+    ? {id:String(x.id), ts:Number(x.ts)||0}
+    : {id:String(x), ts:_tombLegado});
+}
 function registrarRemocao(tipo, ids){
-  const t=_tomb(S); const set=new Set(t[tipo]||[]);
-  (Array.isArray(ids)?ids:[ids]).forEach(i=>set.add(String(i)));
-  t[tipo]=[...set];
+  const t=_tomb(S);
+  const agora=Date.now();
+  const mapa=new Map(_tombNorm(t[tipo]).map(x=>[x.id, x.ts]));
+  (Array.isArray(ids)?ids:[ids]).forEach(i=>mapa.set(String(i), agora));
+  t[tipo]=[...mapa.entries()].map(([id,ts])=>({id,ts}));
+}
+/* tira ids da lista de mortos (usado quando o registro é criado de novo de propósito) */
+function ressuscitar(tipo, ids){
+  const t=_tomb(S); const vivos=new Set((Array.isArray(ids)?ids:[ids]).map(String));
+  t[tipo]=_tombNorm(t[tipo]).filter(x=>!vivos.has(x.id));
 }
 function mesclarListas(locais, remotos, chave, tomb){
-  const morto=new Set((tomb||[]).map(String));
+  const morto=new Map();
+  _tombNorm(tomb).forEach(t=>{ const p=morto.get(t.id); if(p===undefined || t.ts>p) morto.set(t.id, t.ts); });
   const map=new Map();
   const por=(x)=>String(x[chave]);
   (locais||[]).forEach(x=>map.set(por(x), x));
@@ -3103,16 +3121,24 @@ function mesclarListas(locais, remotos, chave, tomb){
     const k=por(x); const a=map.get(k);
     if(!a){ map.set(k,x); return; }
     if(a.fim && !x.fim) return;   // ciclo fechado ganha do aberto
+    if((Number(a.ts)||0) > (Number(x.ts)||0)) return;   // o mais recente manda
     map.set(k,x);
   });
-  return [...map.values()].filter(x=>!morto.has(por(x)));
+  return [...map.values()].filter(x=>{
+    const t=morto.get(por(x));
+    if(t===undefined) return true;
+    return (Number(x.ts)||0) > t;   // recriado depois de apagado: vale
+  });
 }
 function mesclarEstado(remoto){
   const t=_tomb(S), tr=remoto.removidos||{ciclos:[],ordens:[],pessoas:[]};
+  const juntar=(a,b)=>{ const m=new Map();
+    [..._tombNorm(a), ..._tombNorm(b)].forEach(x=>{ const p=m.get(x.id); if(p===undefined || x.ts>p) m.set(x.id, x.ts); });
+    return [...m.entries()].map(([id,ts])=>({id,ts})); };
   const tomb={
-    ciclos:[...new Set([...(t.ciclos||[]), ...(tr.ciclos||[])])],
-    ordens:[...new Set([...(t.ordens||[]), ...(tr.ordens||[])])],
-    pessoas:[...new Set([...(t.pessoas||[]), ...(tr.pessoas||[])])]
+    ciclos: juntar(t.ciclos, tr.ciclos),
+    ordens: juntar(t.ordens, tr.ordens),
+    pessoas:juntar(t.pessoas, tr.pessoas)
   };
   const novoCiclos =mesclarListas(S.ciclos,  remoto.ciclos,  'id',  tomb.ciclos);
   const novoOrdens =mesclarListas(S.ordens,  remoto.ordens,  'num', tomb.ordens);
@@ -3281,6 +3307,15 @@ async function carregar(){
   if(S.cfg.paradaMin===undefined) S.cfg.paradaMin=10;
   if(S.cfg.almocoIni===undefined) S.cfg.almocoIni='11:30';
   if(S.cfg.almocoFim===undefined) S.cfg.almocoFim='13:00';
+  // lápides antigas não têm data. Carimba uma só vez, pra que tudo que for criado
+  // daqui pra frente (reimportação, por exemplo) seja mais novo que elas e sobreviva.
+  if(!S.tombMigrado){ S.tombMigrado=Date.now(); }
+  _tombLegado=S.tombMigrado;
+  // joga fora o registro de importações que não tem mais nenhum lançamento atrás dele
+  if(Array.isArray(S.importacoes)){
+    const lotesVivos=new Set((S.ciclos||[]).map(c=>c.impLote).filter(Boolean));
+    S.importacoes=S.importacoes.filter(i=>lotesVivos.has(i.lote));
+  }
   (S.ciclos||[]).forEach(c=>{ if(!c.opKey) c.opKey=c.op; if(!c.rotulo) c.rotulo=(S.opsBase.find(x=>x.id===c.op)||{}).nome||c.op; if(c.etapaIdx===undefined) c.etapaIdx=-1; });
   fecharDiasAnteriores();
   renderTudo(); preencherCfg();
@@ -4559,32 +4594,26 @@ function renderTamsTemp(){
 }
 /* ---- Importador de planilha de produção (Excel) ---- */
 function normOp(s){ return String(s||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/g,' ').replace(/\s+/g,' ').trim(); }
-function lerPlanilhaProducao(wb, nomeArquivo){
-  const ws=wb.Sheets[wb.SheetNames[0]];
-  const g=XLSX.utils.sheet_to_json(ws,{header:1, raw:true, defval:null});
-  const isData=v=> v instanceof Date || (typeof v==='number' && v>40000 && v<60000);
-  const toData=v=>{ if(v instanceof Date) return v; const d=XLSX.SSF.parse_date_code(v); return d? new Date(d.y,d.m-1,d.d) : null; };
-  // acha as linhas-chave
-  let rData=-1, rOp=-1, rHoras=-1;
-  g.forEach((row,i)=>{
-    if(rData<0 && row.filter(isData).length>=2) rData=i;
-    const t=row.map(x=>normOp(x));
-    if(rHoras<0 && t.some(x=>x==='HORAS')) rHoras=i;
-  });
-  if(rData<0) throw new Error('não achei a linha das datas');
-  // a linha de operação é a primeira abaixo das datas com texto
-  for(let i=rData+1;i<Math.min(rData+4,g.length);i++){
+const _isData=v=> v instanceof Date || (typeof v==='number' && v>36526 && v<60000);  // 36526 = 01/01/2000
+const _toData=v=>{ if(v instanceof Date) return v; const d=XLSX.SSF.parse_date_code(v); return d? new Date(d.y,d.m-1,d.d) : null; };
+/* Lê UM bloco de mês: uma linha de datas, a linha de operações embaixo dela,
+   os lançamentos, o TOTAL e as HORAS. Tudo limitado a [rData, rFim). */
+function lerBlocoProducao(g, rData, rFim, pessoa){
+  const isData=_isData, toData=_toData;
+  let rOp=-1, rHoras=-1;
+  for(let i=rData+1;i<Math.min(rData+4,rFim);i++){
     const row=g[i]||[];
     if(row.some(x=> typeof x==='string' && normOp(x).length>2)){ rOp=i; break; }
   }
   if(rOp<0) throw new Error('não achei a linha das operações');
+  for(let i=rOp+1;i<rFim;i++){ if((g[i]||[]).some(x=>normOp(x)==='HORAS')){ rHoras=i; break; } }
   // acha a linha TOTAL de verdade: a palavra "TOTAL" tem que estar nas primeiras colunas (A/B/C)
   // E a linha precisa ter vários números nas MESMAS colunas onde há datas.
   // Isso evita cair numa tabela lateral (à direita) ou num número solto perdido.
   const colunasComData=[];
   (g[rData]||[]).forEach((v,c)=>{ if(isData(v)) colunasComData.push(c); });
   let rTotal=-1, melhorScore=0;
-  for(let i=rOp+1;i<g.length;i++){
+  for(let i=rOp+1;i<rFim;i++){
     const row=g[i]||[];
     // a palavra TOTAL precisa estar nas 3 primeiras colunas
     const temPalavra=row.slice(0,3).some(x=>normOp(x)==='TOTAL');
@@ -4597,23 +4626,15 @@ function lerPlanilhaProducao(wb, nomeArquivo){
   if(rTotal>=0 && melhorScore < Math.max(2, colunasComData.length*0.3)) rTotal=-1;
   // se não achou HORAS, tenta achar depois do TOTAL
   if(rHoras<0 && rTotal>=0){
-    for(let i=rTotal+1;i<Math.min(rTotal+4,g.length);i++){
+    for(let i=rTotal+1;i<Math.min(rTotal+4,rFim);i++){
       if((g[i]||[]).some(x=>normOp(x)==='HORAS')){ rHoras=i; break; }
     }
   }
   // fim da soma manual (só usado quando não há linha TOTAL): para na primeira linha de resumo
   if(rHoras<0) throw new Error('não achei a linha de HORAS');
   const ehResumo=(row)=>{ const t=(row||[]).map(x=>normOp(x)); return t.some(x=>['FUNCAO','SOMA','MEDIA','M DIA','DIAS','MDIA','TOTAL','HORAS'].includes(x)); };
-  let fimSoma = rHoras>0? rHoras : g.length;
+  let fimSoma = rHoras>=0? rHoras : rFim;
   for(let i=rOp+1; i<fimSoma; i++){ if(ehResumo(g[i])){ fimSoma=i; break; } }
-  // nome da pessoa: célula de texto solta na área de cima, ou o nome do arquivo
-  let pessoa='';
-  const nomesConhecidos=S.pessoas.map(p=>normOp(p.nome));
-  for(let i=0;i<=rData+1 && !pessoa;i++) (g[i]||[]).forEach((v,j)=>{
-    if(!pessoa && typeof v==='string' && nomesConhecidos.includes(normOp(v))) pessoa=String(v).trim();
-  });
-  let pessoaFonte = pessoa? 'planilha' : '';
-  if(!pessoa){ const base=String(nomeArquivo||'').replace(/\.[^.]+$/,''); if(base){ pessoa=base.trim(); pessoaFonte='arquivo'; } }
   // varre as colunas
   const lanc=[];
   const ausencias=[];
@@ -4650,35 +4671,78 @@ function lerPlanilhaProducao(wb, nomeArquivo){
   }
   // lê a tabelinha de faixas (70/80/90/100) que fica embaixo, se existir.
   // formato: uma linha com cabeçalho 0.7/0.8/0.9/1 (ou 70/80/90/100), e abaixo linhas por função.
-  const faixas=[];
-  let rCab=-1;
-  for(let i=0;i<g.length;i++){
-    const row=(g[i]||[]).map(x=> typeof x==='number'? x : normOp(x));
-    // cabeçalho: tem 0.7 e 1 (ou 70 e 100) na mesma linha
-    const nums=row.filter(x=>typeof x==='number');
-    const temPcts = (nums.includes(0.7)||nums.includes(70)) && (nums.includes(1)||nums.includes(100)) && (nums.includes(0.8)||nums.includes(80));
-    if(temPcts){ rCab=i; break; }
-  }
-  if(rCab>=0){
-    // acha as colunas dos 4 percentuais no cabeçalho
-    const cab=g[rCab]||[];
-    let c70=-1,c80=-1,c90=-1,c100=-1;
-    cab.forEach((v,c)=>{
-      if(v===0.7||v===70) c70=c; else if(v===0.8||v===80) c80=c;
-      else if(v===0.9||v===90) c90=c; else if(v===1||v===100) c100=c;
-    });
-    // linhas abaixo: função + 4 valores
-    for(let i=rCab+1;i<Math.min(rCab+8,g.length);i++){
-      const row=g[i]||[];
-      const nomeF=row.find(x=>typeof x==='string' && normOp(x).length>1);
-      if(!nomeF) continue;
-      const m70=Number(row[c70]),m80=Number(row[c80]),m90=Number(row[c90]),m100=Number(row[c100]);
-      if([m70,m80,m90,m100].every(n=>isFinite(n)&&n>0)){
-        faixas.push({funcao:String(nomeF).trim(), metas:[m70,m80,m90,m100]});
-      }
+  return lanc.length||ausencias.length? {lanc, ausencias} : null;
+}
+/* Percorre TODAS as abas do arquivo e TODOS os blocos de mês de cada aba.
+   Antes só a primeira aba e o primeiro bloco eram lidos, e o resto sumia calado —
+   o que arruinaria uma carga de histórico de vários meses ou anos. */
+function lerPlanilhaProducao(wb, nomeArquivo){
+  const isData=_isData;
+  const abas=wb.SheetNames||[];
+  let lanc=[], ausencias=[], faixas=[], pessoa='', pessoaFonte='';
+  const lidos=[], ignorados=[];
+  abas.forEach(nomeAba=>{
+    const ws=wb.Sheets[nomeAba]; if(!ws) return;
+    const g=XLSX.utils.sheet_to_json(ws,{header:1, raw:true, defval:null});
+    // toda linha com 2 ou mais datas abre um bloco de mês
+    const linhasData=[];
+    g.forEach((row,i)=>{ if((row||[]).filter(isData).length>=2) linhasData.push(i); });
+    if(!linhasData.length){ ignorados.push(nomeAba+': não achei linha de datas'); return; }
+    // nome da pessoa: procurado no topo da aba
+    if(!pessoa){
+      const nomesConhecidos=S.pessoas.map(p=>normOp(p.nome));
+      for(let i=0;i<=linhasData[0]+1 && !pessoa;i++) (g[i]||[]).forEach(v=>{
+        if(!pessoa && typeof v==='string' && nomesConhecidos.includes(normOp(v))) pessoa=String(v).trim();
+      });
+      if(pessoa) pessoaFonte='planilha';
     }
-  }
-  return {pessoa, pessoaFonte, lanc, ausencias, faixas};
+    linhasData.forEach((rData,k)=>{
+      const rFim=(k+1<linhasData.length)? linhasData[k+1] : g.length;
+      try{
+        const b=lerBlocoProducao(g, rData, rFim, pessoa);
+        if(!b){ return; }
+        b.lanc.forEach(l=>lanc.push(l));
+        b.ausencias.forEach(a=>{ a.pessoa=pessoa; ausencias.push(a); });
+        const ds=b.lanc.map(l=>l.data).sort((x,y)=>x-y);
+        lidos.push({aba:nomeAba, linha:rData+1, n:b.lanc.length,
+          de: ds[0]||null, ate: ds[ds.length-1]||null});
+      }catch(e){ ignorados.push(nomeAba+' (linha '+(rData+1)+'): '+e.message); }
+    });
+    // metas por faixa: uma leitura por aba
+      let rCab=-1;
+      for(let i=0;i<g.length;i++){
+        const row=(g[i]||[]).map(x=> typeof x==='number'? x : normOp(x));
+        // cabeçalho: tem 0.7 e 1 (ou 70 e 100) na mesma linha
+        const nums=row.filter(x=>typeof x==='number');
+        const temPcts = (nums.includes(0.7)||nums.includes(70)) && (nums.includes(1)||nums.includes(100)) && (nums.includes(0.8)||nums.includes(80));
+        if(temPcts){ rCab=i; break; }
+      }
+      if(rCab>=0){
+        // acha as colunas dos 4 percentuais no cabeçalho
+        const cab=g[rCab]||[];
+        let c70=-1,c80=-1,c90=-1,c100=-1;
+        cab.forEach((v,c)=>{
+          if(v===0.7||v===70) c70=c; else if(v===0.8||v===80) c80=c;
+          else if(v===0.9||v===90) c90=c; else if(v===1||v===100) c100=c;
+        });
+        // linhas abaixo: função + 4 valores
+        for(let i=rCab+1;i<Math.min(rCab+8,g.length);i++){
+          const row=g[i]||[];
+          const nomeF=row.find(x=>typeof x==='string' && normOp(x).length>1);
+          if(!nomeF) continue;
+          const m70=Number(row[c70]),m80=Number(row[c80]),m90=Number(row[c90]),m100=Number(row[c100]);
+          if([m70,m80,m90,m100].every(n=>isFinite(n)&&n>0)){
+            faixas.push({funcao:String(nomeF).trim(), metas:[m70,m80,m90,m100]});
+          }
+        }
+      }
+  });
+  if(!lanc.length && !ausencias.length && !ignorados.length) ignorados.push('nenhum lançamento encontrado');
+  if(!pessoa){ const base=String(nomeArquivo||'').replace(/\.[^.]+$/,''); if(base){ pessoa=base.trim(); pessoaFonte='arquivo'; } }
+  lanc.forEach(l=>{ if(!l.pessoa) l.pessoa=pessoa; });
+  ausencias.forEach(a=>{ if(!a.pessoa) a.pessoa=pessoa; });
+  if(!lanc.length && !ausencias.length) throw new Error(ignorados.join(' · '));
+  return {pessoa, pessoaFonte, lanc, ausencias, faixas, lidos, ignorados};
 }
 function importarPlanilhaClick(){
   if(!autorizado()) return;
@@ -4717,6 +4781,8 @@ async function importarPlanilha(files){
   try{
     const escolhida=_pessoaImport; _pessoaImport=null;
     let todos=[], semPessoa=[], ausenciasTodas=[], faixasTodas=[], pulados=[];
+    const diagLeitura=[], diagIgnorado=[];
+    window._diagImport={leitura:diagLeitura, ignorado:diagIgnorado};
     for(const file of files){
       const buf=await file.arrayBuffer();
       const wb=XLSX.read(buf,{type:'array', cellDates:true});
@@ -4746,6 +4812,8 @@ async function importarPlanilha(files){
         const achou=S.pessoas.find(p=>normOp(p.nome)===normOp(r.pessoa));
         if(achou){ pid=achou.id; pnome=achou.nome; } else { semPessoa.push(r.pessoa||file.name); continue; }
       }
+      (r.lidos||[]).forEach(b=>diagLeitura.push({arq:file.name, pessoa:pnome, ...b}));
+      (r.ignorados||[]).forEach(x=>diagIgnorado.push(file.name+' → '+x));
       r.lanc.forEach(l=>{ l.pessoaId=pid; l.pessoa=pnome; todos.push(l); });
       (r.ausencias||[]).forEach(a=>{ a.pessoaId=pid; ausenciasTodas.push(a); });
       (r.faixas||[]).forEach(f=>{ faixasTodas.push(f); });
@@ -4900,7 +4968,7 @@ function gravarImportacao(todos, criadas){
       const existenteIdx=S.ciclos.findIndex(c=>c.id===a.chave);
       const novo={id:a.chave, pessoa:a.pessoaId, op:a.opId, opKey:a.opId, rotulo, etapaIdx:-1,
         ordem:'(planilha)', tam:'-', pacote:'-', qtd:a.pecas, ini:ini.getTime(), fim:ini.getTime()+a.horas*3600000,
-        pausas:[], rateEfetivo:a.pecas/a.horas, importado:true, impLote:loteId};
+        pausas:[], rateEfetivo:a.pecas/a.horas, importado:true, impLote:loteId, ts:Date.now()};
       if(existenteIdx>=0){
         // já existia (reimportação): SUBSTITUI pelo valor novo, corrige dado antigo errado
         S.ciclos[existenteIdx]=novo; atualizados++;
@@ -4908,22 +4976,43 @@ function gravarImportacao(todos, criadas){
         S.ciclos.push(novo); criados++;
       }
     });
+    // reimportar é um ato deliberado: tira esses ids da lista de apagados
+    ressuscitar('ciclos', Object.values(agr).map(a=>a.chave));
     if(criados || atualizados){
       S.importacoes=S.importacoes||[];
+      // os lançamentos foram reescritos com o lote novo, então os registros antigos
+      // ficaram sem nada atrás deles. Some com eles em vez de empilhar linha morta.
+      const lotesVivos=new Set(S.ciclos.map(c=>c.impLote).filter(Boolean));
+      S.importacoes=S.importacoes.filter(i=>lotesVivos.has(i.lote));
       const resumoPessoas=[...new Set(todos.map(l=>l.pessoa))].join(', ');
-      S.importacoes.push({lote:loteId, quando:Date.now(), pessoas:resumoPessoas, qtd:criados,
+      S.importacoes.push({lote:loteId, quando:Date.now(), pessoas:resumoPessoas, qtd:criados+atualizados,
         pecas:todos.reduce((s,l)=>s+l.pecas,0)});
     }
     salvarTudo(); renderTudo();
     const resumo={};
     todos.forEach(l=>{ const k=l.pessoa; resumo[k]=(resumo[k]||0)+l.pecas; });
     const pcsGravadas=Object.values(agr).reduce((s,a)=>s+a.pecas,0);
+    // conferência de cobertura: com carga de histórico o risco não é errar, é ler menos
+    const d=(window._diagImport||{leitura:[],ignorado:[]});
+    const fmtD=x=> x? new Date(x).toLocaleDateString('pt-BR') : '?';
+    const gravadas=Object.values(agr).map(a=>a.data).sort((x,y)=>x-y);
+    const porMes={};
+    Object.values(agr).forEach(a=>{ const k=a.data.getFullYear()+'-'+String(a.data.getMonth()+1).padStart(2,'0');
+      porMes[k]=(porMes[k]||0)+a.pecas; });
+    const linhasMes=Object.keys(porMes).sort().map(k=>'  '+k+': '+porMes[k]+' pçs').join('\n');
+    const blocos = d.leitura.length? '\n\nAbas e blocos lidos ('+d.leitura.length+'):\n'+
+      d.leitura.map(b=>'  • '+b.arq+' › '+b.aba+' (linha '+b.linha+'): '+b.n+' dias, '+fmtD(b.de)+' a '+fmtD(b.ate)).join('\n') : '';
+    const naoLidos = d.ignorado.length? '\n\n⚠️ NÃO consegui ler:\n'+d.ignorado.map(x=>'  • '+x).join('\n')+
+      '\nConfere se essas abas têm linha de datas, de operação e de HORAS.' : '';
+    const periodo = gravadas.length? '\n\nPeríodo coberto: '+fmtD(gravadas[0])+' a '+fmtD(gravadas[gravadas.length-1])+
+      '\nPor mês:\n'+linhasMes : '';
     alert('Planilhas importadas.\n\n'+criados+' lançamentos criados'+
       (somados? '\n'+somados+' linhas foram SOMADAS (caíram no mesmo dia e na mesma operação)':'')+
       (atualizados? '\n'+atualizados+' já existiam e foram ATUALIZADOS com o valor novo':'')+
       (ignorados? '\n'+ignorados+' ignorados':'')+
       '\n\nPor pessoa:\n'+Object.entries(resumo).map(([k,v])=>'  '+k+': '+v+' pçs').join('\n')+
       ((criadas&&criadas.length)? '\n\nOperações NOVAS criadas:\n'+criadas.map(n=>'  • '+n).join('\n')+'\n\nDefina as metas delas em Ajustes → Operações.' : '')+
+      periodo+blocos+naoLidos+
       '\n\nSe importou errado, use "Desfazer" na lista abaixo do botão.');
 }
 function desfazerImportacao(lote){
@@ -4938,7 +5027,13 @@ function desfazerImportacao(lote){
 function limparImportados(){
   if(!autorizado()) return;
   const n=S.ciclos.filter(c=>c.importado).length;
-  if(!n) return alert('Não há nada importado de planilha.');
+  const nLog=(S.importacoes||[]).length;
+  if(!n && !nLog) return alert('Não há nada importado de planilha.');
+  if(!n && nLog){
+    if(!confirm('Não há mais nenhum lançamento de planilha, só '+nLog+' registro(s) na lista de importações.\n\nLimpar a lista?')) return;
+    S.importacoes=[]; salvarTudo(); renderTudo();
+    return alert('Lista limpa.');
+  }
   if(!confirm('Apagar os '+n+' lançamentos que vieram de planilha?\n\nOs registros bipados NÃO são afetados.\n\nO mapeamento das operações também será esquecido, pra você refazer na tela de conferência.')) return;
   registrarRemocao('ciclos', S.ciclos.filter(c=>c.importado).map(c=>c.id));
   S.ciclos=S.ciclos.filter(c=>!c.importado);
@@ -6990,7 +7085,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.44.0';
+const VERSAO = '3.46.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
