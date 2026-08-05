@@ -3203,13 +3203,35 @@ function ligarBanco(){
     }catch(e){ aplicandoRemoto=false; }
   });
 }
+let fbErro='';
 function iniciarFirebase(){
   try{
     firebase.initializeApp(firebaseConfig);
     // autentica sozinho (anônimo). Só liga o banco depois de autenticar.
-    firebase.auth().onAuthStateChanged(user=>{ if(user) ligarBanco(); });
-    firebase.auth().signInAnonymously().catch(e=>{ console.error('Autenticação falhou', e); pintarStatusSync(); });
-  }catch(e){ console.error('Firebase falhou', e); }
+    firebase.auth().onAuthStateChanged(user=>{ if(user){ fbErro=''; ligarBanco(); } });
+    firebase.auth().signInAnonymously().catch(e=>{
+      // O Firebase só aceita os endereços liberados no console. Abrir o arquivo solto
+      // (file://, preview, outro domínio) cai aqui: o app sobe vazio e PARECE que zerou,
+      // mas os dados continuam inteiros no endereço oficial.
+      const cod=(e&&e.code)||'';
+      fbErro = /unauthorized-domain|auth\/invalid|operation-not-allowed/.test(cod)? 'dominio' : 'auth';
+      console.error('Autenticação falhou', e); pintarStatusSync(); avisarForaDoBanco();
+    });
+  }catch(e){ fbErro='lib'; console.error('Firebase falhou', e); pintarStatusSync(); avisarForaDoBanco(); }
+  // rede boa mas banco mudo por tempo demais também é sinal de estar fora do endereço certo
+  setTimeout(()=>{ if(!jaRecebeuNuvem) avisarForaDoBanco(); }, 8000);
+}
+let jaAvisouForaBanco=false;
+function avisarForaDoBanco(){
+  if(jaAvisouForaBanco || jaRecebeuNuvem) return;
+  jaAvisouForaBanco=true;
+  const d=document.createElement('div');
+  d.style.cssText='position:fixed; left:0; right:0; bottom:0; z-index:9999; background:#7a2e2e; color:#fff; padding:12px 16px; font-size:.85rem; line-height:1.5;';
+  d.innerHTML='<b>Esta cópia não está conectada ao banco.</b> Nada foi apagado: seu histórico está inteiro no endereço oficial do sistema. '+
+    'Isso acontece quando o index.html é aberto solto no computador ou fora do endereço publicado. '+
+    'Abra pelo endereço de sempre e tudo volta a aparecer. '+
+    '<button onclick="this.parentNode.remove()" style="margin-left:10px; padding:4px 10px; border:0; border-radius:5px; cursor:pointer;">Entendi</button>';
+  document.body.appendChild(d);
 }
 const meuId = 'ap-'+Math.random().toString(36).slice(2,9);
 function enviarParaNuvem(){
@@ -3222,7 +3244,16 @@ function enviarParaNuvem(){
 function pintarStatusSync(){
   const el=document.getElementById('syncStatus');
   if(!el) return;
+  if(fbErro){
+    el.textContent='● Fora do banco';
+    el.title = fbErro==='dominio'
+      ? 'Este endereço não está liberado no banco. Os dados não sumiram, estão no endereço oficial.'
+      : 'Não consegui autenticar no banco. Abra pelo endereço oficial do sistema.';
+    el.style.color='var(--f-abx)';
+    return;
+  }
   el.textContent = fbOnline? '● Sincronizado' : '● Sem conexão';
+  el.title = fbOnline? 'Ligado no banco, tudo salvo na nuvem' : 'Sem internet agora. O que você bipar fica salvo e sobe quando voltar.';
   el.style.color = fbOnline? 'var(--f-90)' : 'var(--f-abx)';
 }
 
@@ -6959,7 +6990,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.43.0';
+const VERSAO = '3.44.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
