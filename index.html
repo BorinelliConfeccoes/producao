@@ -2662,9 +2662,9 @@ nav button.oculto{display:none;}
   </div>
   <div class="sub" id="sub-relat-individual">
     <div class="linhaform">
-      <div><label>Pessoa</label><select id="rPessoa"></select></div>
-      <div><label>Período</label><select id="rDias"><option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="60">60 dias</option><option value="9999">Tudo</option></select></div>
-      <button class="acao" onclick="renderRelat()">Gerar relatório</button>
+      <div><label>Pessoa</label><select id="rPessoa" onchange="renderRelat()"></select></div>
+      <div><label>Período</label><select id="rDias" onchange="renderRelat()"><option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="60">60 dias</option><option value="9999">Tudo</option></select></div>
+      <button class="acao" onclick="renderRelat()">Atualizar</button>
     </div>
     <div id="relatOut"></div>
   </div>
@@ -5652,8 +5652,11 @@ function horasPausaTipo(ciclos, tipo){
   return ms;
 }
 function renderRelat(){
-  const pid=rPessoa.value; const dias=Number(rDias.value);
-  const p=S.pessoas.find(x=>x.id===pid); if(!p) return;
+  const selP=document.getElementById('rPessoa'), selD=document.getElementById('rDias');
+  if(!selP || !selD) return;
+  const pid=selP.value; const dias=Number(selD.value)||30;
+  const p=S.pessoas.find(x=>x.id===pid);
+  if(!p){ const o=document.getElementById('relatOut'); if(o) o.innerHTML='<div class="card mini-info">Escolha a pessoa acima.</div>'; return; }
   const desde=Date.now()-dias*86400000;
   const ciclos=S.ciclos.filter(c=>c.pessoa===pid && c.fim && c.ini>=desde);
   if(!ciclos.length){ relatOut.innerHTML='<div class="card mini-info">Nenhum ciclo fechado no período.</div>'; return; }
@@ -5682,7 +5685,7 @@ function renderRelat(){
   const anl=analisePessoa(pid, dias);
   if(anl){
     html+=cardSugestao(anl);
-    html+='<div class="card"><h3 style="margin-top:0;">Ritmo por hora do dia</h3>'+grafCurva(anl.curva, anl.media)+'</div>';
+    html+='<div class="card"><h3 style="margin-top:0;">📈 Ritmo por hora do dia</h3>'+grafCurva(anl.curva, anl.media)+'</div>';
   }
   // horas por tipo
   const hCons=horasPausaTipo(ciclos,'CONSERTO'), hMaq=horasPausaTipo(ciclos,'MAQUINA'), hMat=horasPausaTipo(ciclos,'MATERIAL'), hPes=horasPausaTipo(ciclos,'PESSOAL');
@@ -6956,7 +6959,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.42.0';
+const VERSAO = '3.43.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -7036,6 +7039,7 @@ document.querySelectorAll('.subtabs').forEach(grupo=>{
       if(btn.dataset.s==='mesames') renderMesAMes();
       if(btn.dataset.s==='premios') renderPremios();
       if(btn.dataset.s==='calibra') renderCalibra();
+      if(btn.dataset.s==='individual') renderRelat();
     });
   });
 });
