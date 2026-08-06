@@ -2396,6 +2396,12 @@ td{padding:8px 6px; border-bottom:1px solid var(--linha); vertical-align:middle;
   body *{visibility:hidden;} #areaImpressao, #areaImpressao *{visibility:visible;}
   #areaImpressao{position:absolute; left:0; top:0; width:100%;}
   header,nav{display:none;}
+  /* painel da célula: uma folha por pessoa */
+  body.print-painel #painelOut, body.print-painel #painelOut *{visibility:visible;}
+  body.print-painel #painelOut{position:absolute; left:0; top:0; width:100%;}
+  body.print-painel .naoimprimir{display:none !important;}
+  .quebrapagina{break-inside:avoid; page-break-inside:avoid; page-break-after:always;}
+  .quebrapagina:last-child{page-break-after:auto;}
 }
 .linhaform{display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:10px;}
 .subtabs{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px;}
@@ -2598,6 +2604,7 @@ nav button.oculto{display:none;}
     <button data-s="meta">🎯 Meta / Gargalos</button>
     <button data-s="individual">👤 Individual</button>
     <button data-s="envio">💬 Média do dia</button>
+    <button data-s="painel">📋 Painel da célula</button>
     <button data-s="comparativo">⚖️ Comparativo</button>
     <button data-s="calibra">🎯 Calibração</button>
     <button data-s="ocorr">🧩 Ocorrências</button>
@@ -2663,10 +2670,26 @@ nav button.oculto{display:none;}
   <div class="sub" id="sub-relat-individual">
     <div class="linhaform">
       <div><label>Pessoa</label><select id="rPessoa" onchange="renderRelat()"></select></div>
-      <div><label>Período</label><select id="rDias" onchange="renderRelat()"><option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="60">60 dias</option><option value="9999">Tudo</option></select></div>
+      <div><label>Período</label><select id="rDias" onchange="renderRelat()"></select></div>
       <button class="acao" onclick="renderRelat()">Atualizar</button>
     </div>
     <div id="relatOut"></div>
+  </div>
+  <div class="sub" id="sub-relat-painel">
+    <div class="card naoimprimir">
+      <div class="mini-info" style="margin-bottom:8px;">Uma folha por pessoa, com a meta de cada operação, o que falta para subir de faixa e uma sugestão. Feito para você abrir na frente da costureira ou imprimir e entregar.</div>
+      <div class="linhaform">
+        <div><label>De</label><input type="date" id="pnDe"></div>
+        <div><label>Até</label><input type="date" id="pnAte"></div>
+        <button class="acao" onclick="renderPainelCelula()">Gerar painel</button>
+        <button class="acao sec" onclick="painelMesAnterior()">Mês anterior</button>
+        <button class="acao sec" onclick="painelPeriodo(7)">Últimos 7 dias</button>
+        <button class="acao sec" onclick="painelPeriodo(30)">Últimos 30 dias</button>
+        <button class="acao sec" onclick="painelMes()">Este mês</button>
+        <button class="acao sec" onclick="imprimirPainel()">🖨️ Imprimir (1 folha por pessoa)</button>
+      </div>
+    </div>
+    <div id="painelOut"></div>
   </div>
   <div class="sub" id="sub-relat-envio">
     <div class="card">
@@ -3362,9 +3385,10 @@ function metasDe(opKey){
    que ela sente no dia: a hora em que cai, o tempo parada esperando, a
    operação em que está longe da meta e quem na célula faz melhor. */
 function opBaseDe(c){ return (c.opKey||c.op||'').split('|')[0]; }
-function ciclosDe(pid, dias){
-  const desde = (dias>=9999)? 0 : Date.now()-dias*86400000;
-  return S.ciclos.filter(c=>c.pessoa===pid && c.fim && !c.flag && !c.lote && c.ini>=desde);
+function ciclosDe(pid, dias, de, ate){
+  const desde = (de!=null)? de : ((dias>=9999)? 0 : Date.now()-dias*86400000);
+  const teto  = (ate!=null)? ate : Infinity;
+  return S.ciclos.filter(c=>c.pessoa===pid && c.fim && !c.flag && !c.lote && c.ini>=desde && c.ini<=teto);
 }
 /* Distribui peças e tempo útil de cada ciclo pelas horas do relógio.
    O ritmo cru em pçs/h NÃO serve para comparar horas entre si: quem pega uma
@@ -3429,11 +3453,12 @@ function paradasDe(ciclos){
   return {ms:total, n, dias, msDia: dias? total/dias : 0};
 }
 /* quem na célula tem o melhor ritmo na mesma operação */
-function melhorDaCelula(opBase, dias, excluiPid){
-  const desde=(dias>=9999)? 0 : Date.now()-dias*86400000;
+function melhorDaCelula(opBase, dias, excluiPid, de, ate){
+  const desde=(de!=null)? de : ((dias>=9999)? 0 : Date.now()-dias*86400000);
+  const teto=(ate!=null)? ate : Infinity;
   const por={};
   S.ciclos.forEach(c=>{
-    if(!c.fim || c.flag || c.lote || c.ini<desde) return;
+    if(!c.fim || c.flag || c.lote || c.ini<desde || c.ini>teto) return;
     if(opBaseDe(c)!==opBase) return;
     if(!por[c.pessoa]) por[c.pessoa]={pcs:0, ms:0};
     por[c.pessoa].pcs+=qtdEfetiva(c); por[c.pessoa].ms+=tempoUtil(c);
@@ -3483,8 +3508,8 @@ function custoTroca(ciclos){
           horasTrocaDia: dias? hTroca/dias : 0};
 }
 /* monta ponto forte + a melhor sugestão, sempre com número em peça por dia */
-function analisePessoa(pid, dias){
-  const meus=ciclosDe(pid, dias);
+function analisePessoa(pid, dias, de, ate){
+  const meus=ciclosDe(pid, dias, de, ate);
   if(meus.length<3) return null;
   const totPcs=meus.reduce((s,c)=>s+qtdEfetiva(c),0);
   const totMs=meus.reduce((s,c)=>s+tempoUtil(c),0);
@@ -3502,7 +3527,7 @@ function analisePessoa(pid, dias){
     const f=faixaDe(k, md);
     return {key:k, rotulo:g.rotulo, pcs:g.pcs, horas:h, media:md, meta:m100||0,
             temMeta:!!m70, faixa:f.tx, cls:f.cls, margem:f.margem, pct:f.pct,
-            horasDia:h/nDias, falta:faltaPra(k, md, h), melhor:melhorDaCelula(k, dias, pid)};
+            horasDia:h/nDias, falta:faltaPra(k, md, h), melhor:melhorDaCelula(k, dias, pid, de, ate)};
   }).sort((a,b)=>b.horas-a.horas);
 
   const AMOSTRA_OK = nDias>=3 && meus.length>=8;   // um dia solto não vira diagnóstico
@@ -4932,16 +4957,50 @@ function confirmarMapaOps(){
       S.mapaOps[s]=el.value;
     }
   });
-  // aplica as faixas lidas da tabelinha da planilha nas operações mapeadas.
-  // casa o nome da função (ex "Barra") com a sigla mapeada (ex "BAINHA DE BARRA").
+  // Aplica a tabelinha de faixas da planilha nas operações mapeadas.
+  // ATENÇÃO: a meta é POR OPERAÇÃO e vale pra célula inteira. A tabelinha, porém, vem
+  // da planilha de UMA costureira. Sem conferência, importar a planilha da Fulana
+  // trocava a régua de todo mundo calado, e o prêmio dos outros mudava sem ninguém saber.
   if(faixas && faixas.length){
+    const quem=[...new Set((todos||[]).map(l=>l.pessoa).filter(Boolean))].join(', ')||'esta planilha';
+    const conflitos=[];
+    const aplicar=[];
     faixas.forEach(f=>{
       const fn=normOp(f.funcao);
-      // acha a sigla da planilha que contém o nome da função (Barra → BAINHA DE BARRA)
-      const sig=siglas.find(s=> s.includes(fn) || fn.includes(s) || s.split(' ').some(w=>w===fn));
-      const opId = sig? S.mapaOps[sig] : null;
-      if(opId){ S.metasVar=S.metasVar||{}; S.metasVar[opId]=f.metas; }
+      // acha TODAS as siglas que casam com o nome da função, não só a primeira
+      const sigs=siglas.filter(s=> s===fn || s.includes(fn) || fn.includes(s) || s.split(' ').some(w=>w===fn));
+      if(!sigs.length) return;
+      // se o nome bate em mais de uma operação, não dá pra adivinhar qual: não mexe
+      if(sigs.length>1){
+        conflitos.push({tipo:'ambiguo', funcao:f.funcao, ops:sigs.map(x=>S.mapaOps[x]||x)});
+        return;
+      }
+      const opId=S.mapaOps[sigs[0]]; if(!opId) return;
+      const atual=(S.metasVar||{})[opId];
+      const nome=(S.opsBase.find(o=>o.id===opId)||{}).nome||opId;
+      if(atual && atual.join()!==f.metas.join()){
+        conflitos.push({tipo:'difere', op:nome, opId, de:atual, para:f.metas});
+      } else if(!atual){
+        aplicar.push({opId, nome, metas:f.metas, novo:true});
+      }
     });
+    aplicar.forEach(a=>{ S.metasVar=S.metasVar||{}; S.metasVar[a.opId]=a.metas; });
+    const amb=conflitos.filter(c=>c.tipo==='ambiguo');
+    const dif=conflitos.filter(c=>c.tipo==='difere');
+    if(dif.length){
+      const txt=dif.map(c=>'  • '+c.op+'\n      hoje: '+c.de.join(' / ')+'\n      na planilha: '+c.para.join(' / ')).join('\n');
+      if(confirm('A tabelinha de faixas de '+quem+' é DIFERENTE da meta que já está cadastrada:\n\n'+txt+
+        '\n\nA meta vale para a célula inteira, então trocar aqui muda o prêmio de TODO MUNDO nessa operação.\n\n'+
+        'Trocar pela da planilha? (Cancelar mantém a meta atual e importa só a produção.)')){
+        dif.forEach(c=>{ S.metasVar[c.opId]=c.para; });
+      }
+    }
+    if(amb.length){
+      alert('Não apliquei a faixa de: '+amb.map(c=>'"'+c.funcao+'" (bate com '+c.ops.join(', ')+')').join('; ')+
+        '.\n\nO nome da função na tabelinha casa com mais de uma operação e eu não tenho como adivinhar qual. '+
+        'Ajuste essas metas à mão em Ajustes → Operações.');
+    }
+    if(aplicar.length) console.log('faixas novas aplicadas:', aplicar.map(a=>a.nome));
   }
   ocultarModais();
   gravarImportacao(todos, criadas);
@@ -5777,15 +5836,58 @@ function horasPausaTipo(ciclos, tipo){
   ciclos.forEach(c=> (c.pausas||[]).forEach(p=>{ if(p.tipo===tipo && p.fim) ms+=p.fim-p.ini; }));
   return ms;
 }
+/* Período do relatório individual. O padrão é o MÊS ANTERIOR fechado, não "últimos 30
+   dias": mês fechado é o que se discute com a costureira e o que casa com o prêmio.
+   Janela móvel muda o número a cada dia e a conversa nunca fecha. */
+function resolverPeriodo(v){
+  if(v && v.indexOf('m:')===0){
+    const [y,mo]=v.slice(2).split('-').map(Number);
+    const ini=new Date(y,mo-1,1,0,0,0,0).getTime();
+    const fim=new Date(y,mo,0,23,59,59,999).getTime();
+    return {ini, fim, dias:new Date(y,mo,0).getDate(),
+      rotulo:new Date(y,mo-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'})};
+  }
+  const n=Number(String(v||'').replace('d:',''))||30;
+  if(n>=9999) return {ini:0, fim:Date.now(), dias:9999, rotulo:'todo o histórico'};
+  return {ini:Date.now()-n*86400000, fim:Date.now(), dias:n, rotulo:'últimos '+n+' dias'};
+}
+function mesAnteriorKey(){
+  const h=new Date(); const d=new Date(h.getFullYear(), h.getMonth()-1, 1);
+  return 'm:'+d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+function preencherPeriodoRelat(){
+  const sel=document.getElementById('rDias'); if(!sel) return;
+  const meses=premMeses().slice().reverse();   // meses que têm produção, do mais novo pro mais velho
+  const opt=(v,t,sel2)=>'<option value="'+v+'"'+(sel2?' selected':'')+'>'+t+'</option>';
+  const alvo=mesAnteriorKey();
+  // se o mês anterior não tem produção, cai no mês mais recente que tem
+  const temAlvo=meses.some(k=>'m:'+k===alvo);
+  const padrao = temAlvo? alvo : (meses.length? 'm:'+meses[0] : 'd:30');
+  let h='';
+  meses.forEach(k=>{
+    const [y,mo]=k.split('-');
+    let nome=new Date(y,mo-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
+    if('m:'+k===alvo) nome+=' (mês anterior)';
+    h+=opt('m:'+k, nome, ('m:'+k)===padrao);
+  });
+  h+='<option disabled>──────────</option>';
+  [['d:7','Últimos 7 dias'],['d:30','Últimos 30 dias'],['d:60','Últimos 60 dias'],['d:9999','Tudo']]
+    .forEach(([v,t])=>{ h+=opt(v,t,v===padrao); });
+  const antes=sel.value;
+  sel.innerHTML=h;
+  if(antes && [...sel.options].some(o=>o.value===antes)) sel.value=antes;
+}
 function renderRelat(){
   const selP=document.getElementById('rPessoa'), selD=document.getElementById('rDias');
   if(!selP || !selD) return;
-  const pid=selP.value; const dias=Number(selD.value)||30;
+  if(!selD.options.length) preencherPeriodoRelat();
+  const pid=selP.value;
+  const P=resolverPeriodo(selD.value);
+  const dias=P.dias;
   const p=S.pessoas.find(x=>x.id===pid);
   if(!p){ const o=document.getElementById('relatOut'); if(o) o.innerHTML='<div class="card mini-info">Escolha a pessoa acima.</div>'; return; }
-  const desde=Date.now()-dias*86400000;
-  const ciclos=S.ciclos.filter(c=>c.pessoa===pid && c.fim && c.ini>=desde);
-  if(!ciclos.length){ relatOut.innerHTML='<div class="card mini-info">Nenhum ciclo fechado no período.</div>'; return; }
+  const ciclos=S.ciclos.filter(c=>c.pessoa===pid && c.fim && c.ini>=P.ini && c.ini<=P.fim);
+  if(!ciclos.length){ relatOut.innerHTML='<div class="card mini-info">Nenhum ciclo fechado em '+P.rotulo+'. Troque o período acima.</div>'; return; }
   // por opKey
   const porOp={};
   ciclos.forEach(c=>{
@@ -5793,7 +5895,7 @@ function renderRelat(){
     if(!porOp[k]) porOp[k]={rotulo:c.rotulo, n:0, pcs:0, ms:0, dias:new Set()};
     const g=porOp[k]; g.n++; g.pcs+=qtdEfetiva(c); g.ms+=tempoUtil(c); g.dias.add(fmtData(c.ini));
   });
-  let html='<div class="card"><h2 style="margin-top:0;">'+p.nome+' · últimos '+(dias>=9999?'todos os':dias)+' dias</h2>';
+  let html='<div class="card"><h2 style="margin-top:0;">'+p.nome+' · '+P.rotulo+'</h2>';
   html+='<table><tr><th>Operação</th><th>Dias</th><th>Horas</th><th>Peças</th><th>Média pçs/h</th><th>Min/peça</th><th>Faixa</th><th>Para subir de faixa</th></tr>';
   let totPcs=0, totMs=0;
   Object.entries(porOp).sort((a,b)=>b[1].ms-a[1].ms).forEach(([k,g])=>{
@@ -5808,7 +5910,7 @@ function renderRelat(){
   });
   const minPecaTot=totPcs>0? (totMs/60000/totPcs).toFixed(2).replace('.',',') : '—';
   html+='<tr><td><b>TOTAL PRODUÇÃO</b></td><td></td><td><b>'+fmtH(totMs)+'</b></td><td><b>'+totPcs+'</b></td><td><b>'+Math.round(totPcs/(totMs/3600000))+'</b></td><td><b>'+minPecaTot+'</b></td><td></td><td></td></tr></table></div>';
-  const anl=analisePessoa(pid, dias);
+  const anl=analisePessoa(pid, dias, P.ini, P.fim);
   if(anl){
     html+=cardSugestao(anl);
     html+='<div class="card"><h3 style="margin-top:0;">📈 Ritmo por hora do dia</h3>'+grafCurva(anl.curva, anl.media)+'</div>';
@@ -5940,6 +6042,124 @@ function msgDiaPessoa(p, r){
     'Operação principal: '+r.rotulo+'\n'+
     'Média: '+Math.round(r.mediaOp)+' pçs/h · Faixa '+r.faixa+'\n'+
     r.prox+extra+'\n\nObrigado pelo empenho!';
+}
+/* ================= PAINEL DA CÉLULA =================
+   Uma folha por pessoa. A régua de cada operação fica visível ao lado do ritmo,
+   porque a conversa com a costureira trava quando ela não enxerga contra o que
+   está sendo medida. Ordem fixa: o que ela faz bem, depois o que falta, depois um passo. */
+function painelDatas(){
+  const de=(document.getElementById('pnDe')||{}).value;
+  const ate=(document.getElementById('pnAte')||{}).value;
+  const ini = de? new Date(de+'T00:00:00').getTime() : null;
+  const fim = ate? new Date(ate+'T23:59:59').getTime() : null;
+  return {ini, fim, de, ate};
+}
+function painelPeriodo(n){
+  const hoje=new Date(); const antes=new Date(Date.now()-(n-1)*86400000);
+  const f=d=>d.toISOString().slice(0,10);
+  document.getElementById('pnDe').value=f(antes);
+  document.getElementById('pnAte').value=f(hoje);
+  renderPainelCelula();
+}
+function painelMesAnterior(){
+  const h=new Date();
+  const p=new Date(h.getFullYear(), h.getMonth()-1, 1);
+  const u=new Date(h.getFullYear(), h.getMonth(), 0);
+  const f=d=>new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);
+  document.getElementById('pnDe').value=f(p);
+  document.getElementById('pnAte').value=f(u);
+  renderPainelCelula();
+}
+function painelMes(){
+  const h=new Date(); const p=new Date(h.getFullYear(), h.getMonth(), 1);
+  const f=d=>new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);
+  document.getElementById('pnDe').value=f(p);
+  document.getElementById('pnAte').value=f(h);
+  renderPainelCelula();
+}
+function barraMeta(ritmo, meta){
+  if(!meta) return '<span class="mini-info">sem meta</span>';
+  const pct=Math.min(115, (ritmo/meta)*100);
+  const cor = ritmo>=meta? '#3d4d32' : (pct>=80? '#8a7a2e' : '#b06b3a');
+  return '<div style="position:relative; background:#e6e3d7; border-radius:4px; height:14px; width:150px;">'+
+    '<div style="position:absolute; left:0; top:0; height:14px; border-radius:4px; width:'+Math.min(100,pct)+'%; background:'+cor+';"></div>'+
+    '<div style="position:absolute; left:100%; top:-3px; width:2px; height:20px; background:#333;" title="meta 100%"></div>'+
+    '</div>';
+}
+function imprimirPainel(){
+  const box=document.getElementById('painelOut');
+  if(!box || !box.innerHTML.trim()){ return alert('Gere o painel antes de imprimir.'); }
+  document.body.classList.add('print-painel');
+  const limpar=()=>document.body.classList.remove('print-painel');
+  window.addEventListener('afterprint', limpar, {once:true});
+  setTimeout(()=>{ window.print(); setTimeout(limpar, 1500); }, 60);
+}
+function renderPainelCelula(){
+  const box=document.getElementById('painelOut'); if(!box) return;
+  let {ini, fim, de, ate}=painelDatas();
+  if(!de || !ate){ painelMesAnterior(); return; }   // abre já no mês anterior fechado
+  const dias=Math.max(1, Math.round((fim-ini)/86400000)+1);
+  const rotuloPer=new Date(ini).toLocaleDateString('pt-BR')+' a '+new Date(fim).toLocaleDateString('pt-BR');
+
+  const pids=[...new Set(S.ciclos.filter(c=>c.fim && !c.flag && !c.lote && c.ini>=ini && c.ini<=fim).map(c=>c.pessoa))];
+  if(!pids.length){ box.innerHTML='<div class="card mini-info">Ninguém produziu neste período.</div>'; return; }
+
+  const fichas=pids.map(pid=>({
+    pid, nome:(S.pessoas.find(p=>p.id===pid)||{}).nome||pid,
+    a:analisePessoa(pid, dias, ini, fim)
+  })).filter(x=>x.a);
+
+  // ordena por quem está mais longe da meta, pra quem precisa de conversa vir primeiro
+  const pctGeral=a=>{
+    const comMeta=a.ops.filter(o=>o.temMeta && o.pct!==null);
+    if(!comMeta.length) return 999;
+    const soma=comMeta.reduce((s,o)=>s+o.pct*o.horas,0), peso=comMeta.reduce((s,o)=>s+o.horas,0);
+    return peso? soma/peso : 999;
+  };
+  fichas.sort((x,y)=>pctGeral(x.a)-pctGeral(y.a));
+
+  let html='<div class="card naoimprimir"><b>Painel da célula</b> · '+rotuloPer+' · '+fichas.length+' pessoas'+
+    '<div class="mini-info">Ordenado de quem está mais longe da meta para quem está mais perto.</div></div>';
+
+  fichas.forEach(({nome, a})=>{
+    const g=pctGeral(a);
+    const gTx = g===999? '—' : Math.round(g)+'%';
+    const cor = g===999? '#666' : (g>=100?'#3d4d32': g>=80?'#8a7a2e':'#b06b3a');
+    html+='<div class="card quebrapagina" style="border-left:5px solid '+cor+';">'+
+      '<div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">'+
+        '<div><h3 style="margin:0;">'+nome+'</h3>'+
+          '<div class="mini-info">'+rotuloPer+' · '+a.nDias+' dias trabalhados</div></div>'+
+        '<div style="display:flex; gap:20px; text-align:right;">'+
+          '<div><div class="mini-info">PEÇAS</div><div style="font-size:1.4rem; font-weight:800;">'+a.totPcs+'</div></div>'+
+          '<div><div class="mini-info">HORAS</div><div style="font-size:1.4rem; font-weight:800;">'+fmtH(a.totMs)+'</div></div>'+
+          '<div><div class="mini-info">DA META</div><div style="font-size:1.4rem; font-weight:800; color:'+cor+';">'+gTx+'</div></div>'+
+        '</div>'+
+      '</div>';
+
+    html+='<table style="margin-top:12px;"><tr><th>Operação</th><th>Peças</th><th>Horas</th>'+
+      '<th>Seu ritmo</th><th>Meta 100%</th><th>Onde você está</th><th>Faixa</th><th>Para subir de faixa</th></tr>';
+    a.ops.forEach(o=>{
+      html+='<tr>'+
+        '<td><b>'+o.rotulo+'</b></td>'+
+        '<td>'+o.pcs+'</td>'+
+        '<td>'+o.horas.toFixed(1).replace('.',',')+'</td>'+
+        '<td><b>'+Math.round(o.media)+'</b> pçs/h</td>'+
+        '<td>'+(o.meta? Math.round(o.meta)+' pçs/h' : '<span style="color:#b23b3b;">não cadastrada</span>')+'</td>'+
+        '<td>'+barraMeta(o.media, o.meta)+'</td>'+
+        '<td><span class="faixa '+o.cls+'"'+(o.margem?' title="subiu pela margem de apuração"':'')+'>'+o.faixa+'</span></td>'+
+        '<td class="mini-info">'+((o.falta && o.falta!=='faixa máxima')? o.falta : '🏆 faixa máxima')+'</td>'+
+      '</tr>';
+    });
+    html+='</table>';
+
+    if(a.destaqueTx) html+='<div style="margin-top:12px; background:#f1f5ec; border-left:4px solid #3d4d32; padding:10px 12px; border-radius:0 6px 6px 0;">'+
+      '<b>O que você faz bem</b><br>'+a.destaqueTx+'</div>';
+    if(a.sugestao) html+='<div style="margin-top:8px; background:#f9f4ea; border-left:4px solid #b06b3a; padding:10px 12px; border-radius:0 6px 6px 0;">'+
+      '<b>O próximo passo</b><br>'+a.sugestao.txt+'</div>';
+    if(a.paradas && a.paradas.n) html+='<div class="mini-info" style="margin-top:8px;">Paradas acima de '+(Number(S.cfg.paradaMin)||10)+' min: '+a.paradas.n+' no período, média de '+Math.round(a.paradas.msDia/60000)+' min por dia.</div>';
+    html+='</div>';
+  });
+  box.innerHTML=html;
 }
 function renderEnvioDia(){
   const per=rotuloPeriodo();
@@ -6301,21 +6521,28 @@ function pctProducaoPorRitmo(ym, pid){
     const d=new Date(c.ini);
     if(d.getFullYear()!==y || d.getMonth()!==mo-1) return;
     const base=(c.opKey||c.op||'').split('|')[0];
-    if(!porOp[base]) porOp[base]={pcs:0, ms:0};
+    if(!porOp[base]) porOp[base]={pcs:0, ms:0, rotulo:c.rotulo, origem:new Set()};
     porOp[base].pcs+=qtdEfetiva(c); porOp[base].ms+=tempoUtil(c);
+    porOp[base].origem.add(c.importado? 'planilha' : 'bipagem');
   });
   // pra cada operação: ritmo → percentual pela faixa daquela operação
-  let somaPct=0, somaPeso=0, semMeta=[];
+  let somaPct=0, somaPeso=0, semMeta=[]; const detalhe=[];
   Object.entries(porOp).forEach(([base,g])=>{
     const h=g.ms/3600000; if(h<=0) return;
     const ritmo=g.pcs/h;
     const metas=metasDe(base);   // [m70,m80,m90,m100]
-    if(!metas || !metas[3]){ semMeta.push(base); return; }   // operação sem faixa cadastrada
+    const rotulo=(S.opsBase.find(o=>o.id===base)||{}).nome||g.rotulo||base;
+    if(!metas || !metas[3]){
+      semMeta.push(rotulo);
+      detalhe.push({rotulo, ritmo, metas:null, pct:null, horas:h, pcs:g.pcs, origem:g.origem});
+      return;   // operação sem faixa cadastrada
+    }
     const pct=pctDoRitmo(ritmo, metas);
+    detalhe.push({rotulo, ritmo, metas, pct, horas:h, pcs:g.pcs, origem:g.origem});
     somaPct+=pct*h; somaPeso+=h;   // pondera pelas horas
   });
-  if(somaPeso<=0) return {pct:0, semMeta};
-  return {pct:Math.round(somaPct/somaPeso), semMeta};
+  if(somaPeso<=0) return {pct:0, semMeta, detalhe, peso:0};
+  return {pct:Math.round(somaPct/somaPeso), semMeta, detalhe, peso:somaPeso};
 }
 // converte um ritmo (pçs/h) no percentual, interpolando entre as faixas
 function pctDoRitmo(ritmo, metas){
@@ -6366,6 +6593,7 @@ function calcularPremio(ym, pid, metaMensalCamisetas){
   if(ov.prod!=null && ov.prod!==''){ prodFinal=Number(ov.prod)||0; ajustado=true; }
   return {assid:assidFinal, assidCalc, motivoAssid, pctProd, pctFinal, teto,
           premioProd:prodFinal, prodCalc, faixaProd:premioProd.faixa, motivoProd, opsSemMeta,
+          detalhePct:pr.detalhe||[], pesoPct:pr.peso||0,
           ajustado, motivoAjuste:ov.motivo||'',
           dias:prod.diasTrab, pcs:prod.pcs, total:assidFinal+prodFinal};
 }
@@ -6418,6 +6646,35 @@ function ajustarPremio(ym, pid, nome){
   if(p.override.assid==null && p.override.prod==null){ delete p.override; }
   salvarTudo(); renderPremios();
 }
+function verConta(pid){
+  const tr=document.getElementById('conta-'+pid); if(!tr) return;
+  tr.style.display = (tr.style.display==='none')? '' : 'none';
+}
+/* A conta aberta. Sem isso, um % que parece errado vira discussão sem prova:
+   ninguém consegue ver qual meta o sistema usou nem quanto cada operação pesou. */
+function contaHtml(nome, r){
+  const d=r.detalhePct||[];
+  if(!d.length) return '<div class="mini-info">Sem operações com produção no mês.</div>';
+  const n1=x=>Math.round(x), n2=x=>x.toFixed(1).replace('.',',');
+  let h='<div style="padding:6px 2px;"><b>Como saiu o '+r.pctFinal+'% de '+nome+'</b>'+
+    '<table style="margin-top:6px;"><tr><th>Operação</th><th>Peças</th><th>Horas</th><th>Ritmo</th>'+
+    '<th>Faixas usadas (70/80/90/100)</th><th>%</th><th>Peso</th><th>Origem</th></tr>';
+  d.forEach(o=>{
+    const peso = r.pesoPct? (o.horas/r.pesoPct*100) : 0;
+    const org=[...(o.origem||[])].join(' + ')||'—';
+    h+='<tr><td>'+o.rotulo+'</td><td>'+n1(o.pcs)+'</td><td>'+n2(o.horas)+'</td><td><b>'+n1(o.ritmo)+'</b> pçs/h</td>'+
+       '<td>'+(o.metas? o.metas.map(n1).join(' / ') : '<span style="color:#b23b3b;">sem faixa cadastrada</span>')+'</td>'+
+       '<td>'+(o.pct===null? '<span style="color:#b23b3b;">fora da conta</span>' : '<b>'+n1(o.pct)+'%</b>')+'</td>'+
+       '<td>'+(o.pct===null? '—' : n1(peso)+'%')+'</td>'+
+       '<td class="mini-info">'+org+'</td></tr>';
+  });
+  h+='</table><div class="mini-info" style="margin-top:6px;">'+
+     'O % de cada operação sai do ritmo comparado com as faixas <b>daquela operação</b>, e o % final é a média ponderada pelas horas. '+
+     'Se uma faixa aqui não é a que você combinou com a pessoa, o problema está na meta cadastrada em Ajustes → Operações, não no cálculo.';
+  if(r.opsSemMeta && r.opsSemMeta.length) h+=' <b style="color:#b23b3b;">Operações sem faixa ficam de fora e distorcem o resultado: '+r.opsSemMeta.join(', ')+'.</b>';
+  h+='</div></div>';
+  return h;
+}
 function renderPremios(){
   const box=document.getElementById('premiosOut'); if(!box) return;
   const sel=document.getElementById('premMes');
@@ -6467,7 +6724,8 @@ function renderPremios(){
       '<td>'+inp('atrasos',pres.atrasos)+'</td>'+
       '<td>'+inp('saidas',pres.saidas)+'</td>'+
       '<td>'+r.pctFinal+'%'+(r.teto<100?' <span class="mini-info">(teto '+r.teto+'%)</span>':'')+
-        (r.opsSemMeta && r.opsSemMeta.length? ' <span title="Operações sem faixa cadastrada, ficaram de fora do %: '+r.opsSemMeta.join(', ')+'" style="cursor:help; color:#b23b3b;">⚠</span>':'')+'</td>'+
+        (r.opsSemMeta && r.opsSemMeta.length? ' <span title="Operações sem faixa cadastrada, ficaram de fora do %: '+r.opsSemMeta.join(', ')+'" style="cursor:help; color:#b23b3b;">⚠</span>':'')+
+        '<br><button class="acao mini sec" style="margin-top:4px;" onclick="verConta(\''+pid+'\')">ver conta</button></td>'+
       cell(r.assid, r.assidCalc, r.motivoAssid, '#f5faf0')+
       cell(r.premioProd, r.prodCalc, r.faixaProd?r.faixaProd+'%':'', '#fdf9f0')+
       '<td><b>R$ '+r.total.toFixed(0)+'</b></td>'+
@@ -6476,6 +6734,7 @@ function renderPremios(){
     if(r.ajustado && r.motivoAjuste){
       html+='<tr><td colspan="12" class="mini-info" style="padding-top:0; color:#8a5a00;">✏️ '+nome+': '+r.motivoAjuste+'</td></tr>';
     }
+    html+='<tr id="conta-'+pid+'" style="display:none;"><td colspan="12" style="background:#faf8f0;">'+contaHtml(nome, r)+'</td></tr>';
   });
   html+='<tr style="border-top:2px solid #ccc;"><td colspan="8" style="text-align:right;"><b>TOTAIS</b></td>'+
     '<td style="background:#eef5e6;"><b>R$ '+totAssid.toFixed(0)+'</b></td>'+
@@ -7085,7 +7344,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.46.0';
+const VERSAO = '3.49.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -7166,6 +7425,7 @@ document.querySelectorAll('.subtabs').forEach(grupo=>{
       if(btn.dataset.s==='premios') renderPremios();
       if(btn.dataset.s==='calibra') renderCalibra();
       if(btn.dataset.s==='individual') renderRelat();
+      if(btn.dataset.s==='painel') renderPainelCelula();
     });
   });
 });
@@ -7180,7 +7440,7 @@ document.querySelectorAll('nav button').forEach(b=>{
     renderTudo();
   });
 });
-function renderTudo(){ renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); renderImportacoes(); renderCronoHist(); if(perfilAtivo==='costureira') renderMinha(); if(document.querySelector('#sub-relat-diadia.on')) renderDiaDia(); }
+function renderTudo(){ preencherPeriodoRelat(); renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); renderImportacoes(); renderCronoHist(); if(perfilAtivo==='costureira') renderMinha(); if(document.querySelector('#sub-relat-diadia.on')) renderDiaDia(); }
 /* atalhos: Enter confirma, Esc cancela nos modais */
 document.addEventListener('keydown', e=>{
   const conf=document.getElementById('confModal'), lac=document.getElementById('lacModal');
