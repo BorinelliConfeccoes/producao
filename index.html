@@ -2396,13 +2396,35 @@ td{padding:8px 6px; border-bottom:1px solid var(--linha); vertical-align:middle;
   body *{visibility:hidden;} #areaImpressao, #areaImpressao *{visibility:visible;}
   #areaImpressao{position:absolute; left:0; top:0; width:100%;}
   header,nav{display:none;}
-  /* painel da célula: uma folha por pessoa */
+  /* ---- painel da célula ----
+     Enche a folha com quantas fichas couberem, mas NUNCA parte uma pessoa em duas
+     páginas: break-inside:avoid segura a ficha inteira junta. */
   body.print-painel #painelOut, body.print-painel #painelOut *{visibility:visible;}
   body.print-painel #painelOut{position:absolute; left:0; top:0; width:100%;}
   body.print-painel .naoimprimir{display:none !important;}
-  .quebrapagina{break-inside:avoid; page-break-inside:avoid; page-break-after:always;}
-  .quebrapagina:last-child{page-break-after:auto;}
+  .quebrapagina{break-inside:avoid; page-break-inside:avoid;}
+  /* imprime as cores das barras e dos selos, senão a coluna sai vazia */
+  body.print-painel *{-webkit-print-color-adjust:exact; print-color-adjust:exact;}
+  body.print-painel .ficha{
+    margin:0 0 8mm; padding:5mm 6mm; box-shadow:none;
+    border:1px solid #999; border-radius:4px; background:#fff;
+  }
+  body.print-painel .ficha h3{font-size:12pt; margin:0;}
+  body.print-painel .fichaNum{font-size:12pt !important;}
+  body.print-painel .ficha table{font-size:8.5pt; width:100%; margin-top:4mm;}
+  body.print-painel .ficha th, body.print-painel .ficha td{padding:1.5mm 2mm;}
+  body.print-painel .ficha .mini-info{font-size:7.5pt;}
+  body.print-painel .notaFicha{margin-top:3mm; padding:2.5mm 3mm; font-size:9pt;}
+  body.print-painel .barrameta{width:70px !important;}
+  @page{margin:10mm;}
 }
+/* ---- ficha do painel (tela) ---- */
+.fichaTop{display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;}
+.fichaNums{display:flex; gap:20px; text-align:right;}
+.fichaNum{font-size:1.4rem; font-weight:800; line-height:1.2;}
+.notaFicha{margin-top:10px; padding:9px 12px; border-radius:0 6px 6px 0; line-height:1.5;}
+.nfBom{background:#f1f5ec; border-left:4px solid #3d4d32;}
+.nfPasso{background:#f9f4ea; border-left:4px solid #b06b3a;}
 .linhaform{display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:10px;}
 .subtabs{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px;}
 .subtabs button{padding:8px 16px; border-radius:999px; border:1.5px solid var(--verde); background:#fff; color:var(--verde); font-weight:700; font-size:.82rem; cursor:pointer;}
@@ -2686,7 +2708,7 @@ nav button.oculto{display:none;}
         <button class="acao sec" onclick="painelPeriodo(7)">Últimos 7 dias</button>
         <button class="acao sec" onclick="painelPeriodo(30)">Últimos 30 dias</button>
         <button class="acao sec" onclick="painelMes()">Este mês</button>
-        <button class="acao sec" onclick="imprimirPainel()">🖨️ Imprimir (1 folha por pessoa)</button>
+        <button class="acao sec" onclick="imprimirPainel()">🖨️ Imprimir</button>
       </div>
     </div>
     <div id="painelOut"></div>
@@ -3536,16 +3558,49 @@ function analisePessoa(pid, dias, de, ate){
   const par=paradasDe(meus);
   const tro=AMOSTRA_OK? custoTroca(meus) : null;
 
-  /* ---- ponto forte: onde ela está melhor contra a meta, ou o melhor dia ---- */
+  /* ---- o maior feito do período ----
+     Reconhecimento genérico não gera nada. O que muda a conversa é o maior número
+     que a pessoa realmente fez, com data e quantidade, porque ela lembra daquele dia. */
+  const porDiaP={};
+  meus.forEach(c=>{ const d=fmtData(c.ini); if(!porDiaP[d]) porDiaP[d]={pcs:0, ms:0};
+    porDiaP[d].pcs+=qtdEfetiva(c); porDiaP[d].ms+=tempoUtil(c); });
+  const diasLista=Object.entries(porDiaP).map(([d,g])=>({d, pcs:g.pcs, media:g.ms>0? g.pcs/(g.ms/3600000) : 0}));
+  // O dia de maior volume pode ser justamente o dia mais lento (ela trabalhou mais horas,
+  // ou juntou duas operações). Elogiar esse dia é o oposto do que se quer, e ela percebe.
+  // Então: maior volume ENTRE os dias em que o ritmo ficou pelo menos na média dela.
+  let recorde=null;
+  if(nDias>=3 && diasLista.length){
+    const bons=diasLista.filter(d=>d.media>=media);
+    recorde=(bons.length? bons : diasLista).reduce((x,y)=>y.pcs>x.pcs?y:x);
+  }
+  const maiorVol = ops.length? ops.slice().sort((a,b)=>b.pcs-a.pcs)[0] : null;
   const comMeta=ops.filter(o=>o.temMeta && o.pct!==null);
   const destaque = comMeta.length? comMeta.slice().sort((a,b)=>b.pct-a.pct)[0] : ops[0];
-  let destaqueTx='';
-  if(destaque){
-    const lider = destaque.melhor && destaque.media>=destaque.melhor.rate;
-    destaqueTx = destaque.rotulo+': '+Math.round(destaque.media)+' pçs/h'+
-      (destaque.temMeta? ' · faixa '+destaque.faixa : '')+
-      (lider? ' · a melhor da célula nessa operação' : '');
+  const lidera = ops.filter(o=>o.melhor && o.media>=o.melhor.rate && o.horas>=3);
+
+  const destaqueLinhas=[];
+  if(maiorVol) destaqueLinhas.push('Você fez '+maiorVol.pcs+' peças em '+maiorVol.rotulo+
+    (ops.length>1? ', o seu maior volume no período' : ' no período')+'.');
+  if(recorde) destaqueLinhas.push('Seu melhor dia foi '+recorde.d+': '+recorde.pcs+' peças, '+Math.round(recorde.media)+' pçs/h.');
+  if(lidera.length) destaqueLinhas.push('Você é a mais rápida da célula em '+lidera.map(o=>o.rotulo).join(' e ')+'.');
+  else if(destaque && destaque.temMeta) destaqueLinhas.push('Sua melhor faixa é '+destaque.rotulo+', '+Math.round(destaque.media)+' pçs/h na faixa '+destaque.faixa+'.');
+
+  /* ---- o toque: o empurrãozinho sai de dentro do ponto forte, não de uma cobrança
+     separada. Converter a diferença em "uma peça a cada X" tira o número do abstrato. ---- */
+  let toque='';
+  if(destaque && destaque.temMeta){
+    const m=/faltam (\d+) pçs\/h para (\d+%)/.exec(destaque.falta||'');
+    if(m){
+      const dif=Number(m[1]);
+      const seg=Math.round(3600/dif);
+      const ritmoTx = seg>=90? Math.round(seg/60)+' minutos' : seg+' segundos';
+      toque='Você já está em '+Math.round(destaque.media)+' pçs/h em '+destaque.rotulo+
+        '. Faltam '+dif+' pçs/h para '+m[2]+', que é uma peça a mais a cada '+ritmoTx+'. Está perto.';
+    } else if((destaque.falta||'')==='faixa máxima'){
+      toque='Em '+destaque.rotulo+' você já está na faixa máxima. O desafio agora é segurar esse ritmo o mês inteiro.';
+    }
   }
+  const destaqueTx=destaqueLinhas.join(' ');
 
   /* ---- candidatas a sugestão, todas medidas em peças por dia ---- */
   const cands=[];
@@ -3559,7 +3614,7 @@ function analisePessoa(pid, dias, de, ate){
     let txt='Em '+o.rotulo+' você está em '+Math.round(o.media)+' pçs/h e '+alvoTx.replace(/ \(.*\)$/,'')+'.';
     if(o.melhor && o.melhor.rate>o.media+2) txt+=' '+o.melhor.nome+' faz '+Math.round(o.melhor.rate)+' pçs/h na mesma operação, vale ver como ela pega a peça.';
     txt+=' Fechando essa diferença são cerca de '+Math.round(ganho)+' peças a mais por dia.';
-    cands.push({ganho, txt, tag:'operação'});
+    cands.push({ganho, txt, tag:'operação', op:o.key});
   });
   if(AMOSTRA_OK && par.n && par.msDia>0){
     const ganho=(par.msDia/3600000)*media;
@@ -3593,9 +3648,15 @@ function analisePessoa(pid, dias, de, ate){
   const teto=(totPcs/nDias)*0.25;
   const cands2=cands.filter(c=>c.ganho>0).map(c=>Object.assign({}, c, {ganho:Math.min(c.ganho, teto)}));
   cands2.sort((x,y)=>y.ganho-x.ganho);
+  // o toque já falou da operação do destaque. O próximo passo tem que trazer coisa nova,
+  // senão a ficha repete o mesmo recado duas vezes e perde força.
+  const opDoToque = toque? (destaque||{}).key : null;
+  const sugestaoFinal = opDoToque? (cands2.find(c=>c.op!==opDoToque) || null) : (cands2[0]||null);
+  const outrasFinal = cands2.filter(c=>c!==sugestaoFinal && c.op!==opDoToque).slice(0,2);
 
   return {totPcs, totMs, nDias, media, horasDia, ops, curva, paradas:par, troca:tro,
-          destaque, destaqueTx, sugestao:cands2[0]||null, outras:cands2.slice(1,3)};
+          destaque, destaqueTx, destaqueLinhas, toque, recorde, maiorVol,
+          sugestao:sugestaoFinal, outras:outrasFinal};
 }
 /* barrinha simples de horas, sem biblioteca, no estilo do resto do app */
 function grafCurva(curva, mediaGeral){
@@ -3635,7 +3696,9 @@ function tabelaOps(ops){
 function cardSugestao(a){
   if(!a) return '';
   let h='<div class="card">';
-  if(a.destaqueTx) h+='<h3 style="margin-top:0;">Seu destaque</h3><div style="margin-bottom:10px;">🏅 '+a.destaqueTx+'</div>';
+  if(a.destaqueLinhas && a.destaqueLinhas.length) h+='<h3 style="margin-top:0;">🏅 O que você fez de melhor</h3>'+
+    '<div style="margin-bottom:10px;">'+a.destaqueLinhas.join('<br>')+
+    (a.toque? '<div style="margin-top:6px; font-style:italic; color:#5a5a4e;">'+a.toque+'</div>' : '')+'</div>';
   if(a.sugestao){
     h+='<h3>Onde dá para ganhar mais</h3>'+
        '<div style="background:#f6f4ea; border-left:4px solid #b06b3a; padding:10px 12px; border-radius:0 6px 6px 0;">'+a.sugestao.txt+'</div>';
@@ -6032,7 +6095,8 @@ function msgDiaPessoa(p, r){
   const a=analisePessoa(p.id, 30);
   let extra='';
   if(a){
-    if(a.destaqueTx) extra+='\n\nSeu destaque: '+a.destaqueTx;
+    if(a.destaqueLinhas && a.destaqueLinhas.length) extra+='\n\n🏅 O que você fez de melhor:\n'+
+      a.destaqueLinhas.map(l=>'  '+l).join('\n')+(a.toque? '\n  '+a.toque : '');
     if(a.sugestao) extra+='\n\nOnde dá para ganhar mais (olhando os últimos 30 dias):\n'+a.sugestao.txt;
   }
   return 'Borinelli Confecções · '+cab+'\n\n'+
@@ -6079,12 +6143,15 @@ function painelMes(){
 }
 function barraMeta(ritmo, meta){
   if(!meta) return '<span class="mini-info">sem meta</span>';
-  const pct=Math.min(115, (ritmo/meta)*100);
+  const real=(ritmo/meta)*100;
+  const pct=Math.min(115, real);
   const cor = ritmo>=meta? '#3d4d32' : (pct>=80? '#8a7a2e' : '#b06b3a');
-  return '<div style="position:relative; background:#e6e3d7; border-radius:4px; height:14px; width:150px;">'+
-    '<div style="position:absolute; left:0; top:0; height:14px; border-radius:4px; width:'+Math.min(100,pct)+'%; background:'+cor+';"></div>'+
-    '<div style="position:absolute; left:100%; top:-3px; width:2px; height:20px; background:#333;" title="meta 100%"></div>'+
-    '</div>';
+  // o número vai junto: impresso em preto e branco a cor da barra não diz nada
+  return '<div style="display:flex; align-items:center; gap:8px;">'+
+    '<div class="barrameta" style="position:relative; background:#e6e3d7; border:1px solid #c9c5b4; border-radius:4px; height:12px; width:110px; flex:none;">'+
+      '<div style="position:absolute; left:0; top:0; height:10px; border-radius:3px; width:'+Math.min(100,pct)+'%; background:'+cor+';"></div>'+
+      '<div style="position:absolute; left:100%; top:-3px; width:2px; height:16px; background:#333;" title="meta 100%"></div>'+
+    '</div><b style="white-space:nowrap;">'+Math.round(real)+'%</b></div>';
 }
 function imprimirPainel(){
   const box=document.getElementById('painelOut');
@@ -6125,14 +6192,14 @@ function renderPainelCelula(){
     const g=pctGeral(a);
     const gTx = g===999? '—' : Math.round(g)+'%';
     const cor = g===999? '#666' : (g>=100?'#3d4d32': g>=80?'#8a7a2e':'#b06b3a');
-    html+='<div class="card quebrapagina" style="border-left:5px solid '+cor+';">'+
-      '<div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">'+
+    html+='<div class="card ficha quebrapagina" style="border-left:5px solid '+cor+';">'+
+      '<div class="fichaTop">'+
         '<div><h3 style="margin:0;">'+nome+'</h3>'+
           '<div class="mini-info">'+rotuloPer+' · '+a.nDias+' dias trabalhados</div></div>'+
-        '<div style="display:flex; gap:20px; text-align:right;">'+
-          '<div><div class="mini-info">PEÇAS</div><div style="font-size:1.4rem; font-weight:800;">'+a.totPcs+'</div></div>'+
-          '<div><div class="mini-info">HORAS</div><div style="font-size:1.4rem; font-weight:800;">'+fmtH(a.totMs)+'</div></div>'+
-          '<div><div class="mini-info">DA META</div><div style="font-size:1.4rem; font-weight:800; color:'+cor+';">'+gTx+'</div></div>'+
+        '<div class="fichaNums">'+
+          '<div><div class="mini-info">PEÇAS</div><div class="fichaNum">'+a.totPcs+'</div></div>'+
+          '<div><div class="mini-info">HORAS</div><div class="fichaNum">'+fmtH(a.totMs)+'</div></div>'+
+          '<div><div class="mini-info">DA META</div><div class="fichaNum" style="color:'+cor+';">'+gTx+'</div></div>'+
         '</div>'+
       '</div>';
 
@@ -6152,11 +6219,11 @@ function renderPainelCelula(){
     });
     html+='</table>';
 
-    if(a.destaqueTx) html+='<div style="margin-top:12px; background:#f1f5ec; border-left:4px solid #3d4d32; padding:10px 12px; border-radius:0 6px 6px 0;">'+
-      '<b>O que você faz bem</b><br>'+a.destaqueTx+'</div>';
-    if(a.sugestao) html+='<div style="margin-top:8px; background:#f9f4ea; border-left:4px solid #b06b3a; padding:10px 12px; border-radius:0 6px 6px 0;">'+
-      '<b>O próximo passo</b><br>'+a.sugestao.txt+'</div>';
-    if(a.paradas && a.paradas.n) html+='<div class="mini-info" style="margin-top:8px;">Paradas acima de '+(Number(S.cfg.paradaMin)||10)+' min: '+a.paradas.n+' no período, média de '+Math.round(a.paradas.msDia/60000)+' min por dia.</div>';
+    if(a.destaqueLinhas && a.destaqueLinhas.length) html+='<div class="notaFicha nfBom">'+
+      '<b>🏅 O que você fez de melhor</b><br>'+a.destaqueLinhas.join('<br>')+
+      (a.toque? '<div style="margin-top:6px; font-style:italic;">'+a.toque+'</div>' : '')+'</div>';
+    if(a.sugestao) html+='<div class="notaFicha nfPasso"><b>O próximo passo</b><br>'+a.sugestao.txt+'</div>';
+    if(a.paradas && a.paradas.n) html+='<div class="mini-info" style="margin-top:6px;">Paradas acima de '+(Number(S.cfg.paradaMin)||10)+' min: '+a.paradas.n+' no período, média de '+Math.round(a.paradas.msDia/60000)+' min por dia.</div>';
     html+='</div>';
   });
   box.innerHTML=html;
@@ -7344,7 +7411,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.49.0';
+const VERSAO = '3.51.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
