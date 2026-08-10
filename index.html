@@ -2930,6 +2930,7 @@ nav button.oculto{display:none;}
   <div class="card">
     <h2 style="margin-top:0;">Operações base e metas (peças/hora)</h2>
     <div class="mini-info" style="margin-bottom:8px;">Metas por variação específica podem ser definidas na Calibração (aba Relatórios). Aqui ficam as bases.</div>
+    <div id="avisoFantasma"></div>
     <table id="tabOperacoes"></table>
     <div style="margin-top:12px; display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
       <div><label>Nova operação</label><input id="novaOpNome" placeholder="Ex: Vira boca, Travete..." style="width:200px;"></div>
@@ -7382,7 +7383,16 @@ function addOpBase(){
 }
 function setMetaBase(id,idx,val){
   const o=S.opsBase.find(x=>x.id===id); if(!o) return;
+  if(!o.metas) o.metas=[0,0,0,0];
   o.metas[idx]=Math.max(0, Math.round(Number(val)||0));
+  // se havia uma meta salva em metasVar (de importação/calibração antiga) pra ESTA operação,
+  // ela mandava no relatório por cima da base. Ao editar a base aqui, essa meta-fantasma vira
+  // exatamente o que você digitou, pra tela e relatório mostrarem o mesmo número.
+  if(S.metasVar){
+    Object.keys(S.metasVar).forEach(k=>{
+      if(k===id || k.split('|')[0]===id) S.metasVar[k]=o.metas.slice();
+    });
+  }
   salvarTudo();
 }
 function removerOpBase(id){
@@ -7422,14 +7432,46 @@ function editarFone(id){
   if(f!==null) p.fone=f.replace(/\D/g,'');
   salvarTudo(); renderTudo();
 }
+function sincronizarMetas(){
+  if(!autorizado()) return;
+  if(!S.metasVar) return;
+  let n=0;
+  S.opsBase.forEach(o=>{
+    const base=o.metas||[0,0,0,0];
+    Object.keys(S.metasVar).forEach(k=>{
+      if((k===o.id||k.split('|')[0]===o.id) && JSON.stringify(S.metasVar[k])!==JSON.stringify(base)){
+        S.metasVar[k]=base.slice(); n++;
+      }
+    });
+  });
+  salvarTudo(); renderAjustes();
+  alert(n? n+' meta(s) escondida(s) foram sincronizadas com o que aparece na tela.' : 'Nenhuma meta escondida encontrada. Tela e relatório já estão iguais.');
+}
 function renderAjustes(){
   listaPessoas.innerHTML=S.pessoas.map(p=>'<span class="chip" style="cursor:pointer;" onclick="editarFone(\''+p.id+'\')">'+p.nome+(p.fone?' 📱':' <span style=color:var(--f-abx)>sem WhatsApp</span>')+'</span>').join('');
   tabOperacoes.innerHTML='<tr><th>Operação</th><th>70%</th><th>80%</th><th>90%</th><th>100%</th><th></th></tr>'+
     S.opsBase.map(o=>{
-      const metas=o.metas.map((m,j)=>'<td><input type="number" value="'+m+'" style="width:60px;" onchange="setMetaBase(\''+o.id+'\','+j+',this.value)"></td>').join('');
+      // valor EFETIVO que o sistema usa (metasVar manda por cima da base). Mostra a verdade.
+      const efet=metasDe(o.id);
+      const base=o.metas||[0,0,0,0];
+      // fantasma: metasVar tem valor diferente da base (a tela mostrava a base, o relatório usava outro)
+      const fantasma = S.metasVar && Object.keys(S.metasVar).some(k=>(k===o.id||k.split('|')[0]===o.id) && JSON.stringify(S.metasVar[k])!==JSON.stringify(base));
+      const metas=efet.map((m,j)=>'<td><input type="number" value="'+m+'" style="width:60px;'+(fantasma?'background:#fff3cd;':'')+'" onchange="setMetaBase(\''+o.id+'\','+j+',this.value)"></td>').join('');
       const acao=o.extra?'<td><b title="Remover" style="color:#b23b3b;cursor:pointer;" onclick="removerOpBase(\''+o.id+'\')">✕</b></td>':'<td></td>';
-      return '<tr><td><b>'+o.nome+'</b>'+(o.extra?' <span class="mini-info">(sua)</span>':'')+'</td>'+metas+acao+'</tr>';
+      const avisoFant = fantasma? '<div class="mini-info" style="color:#8a6d3b;">⚠ tinha uma meta antiga escondida; edite qualquer campo pra corrigir</div>':'';
+      return '<tr><td><b>'+o.nome+'</b>'+(o.extra?' <span class="mini-info">(sua)</span>':'')+avisoFant+'</td>'+metas+acao+'</tr>';
     }).join('');
+  // conta quantas operações têm meta escondida (metasVar diferente da base)
+  const nFant = S.metasVar? S.opsBase.filter(o=>{
+    const base=o.metas||[0,0,0,0];
+    return Object.keys(S.metasVar).some(k=>(k===o.id||k.split('|')[0]===o.id) && JSON.stringify(S.metasVar[k])!==JSON.stringify(base));
+  }).length : 0;
+  const avf=document.getElementById('avisoFantasma');
+  if(avf) avf.innerHTML = nFant
+    ? '<div style="background:#fff3cd; border-left:4px solid #c7a581; border-radius:4px; padding:8px 12px; margin-bottom:10px;">'+
+      '<b>'+nFant+' operação(ões) têm uma meta escondida</b> diferente do que aparece aqui. Isso faz o relatório mostrar meta onde a tela mostra zero. '+
+      '<button class="acao mini" onclick="sincronizarMetas()">Sincronizar agora</button></div>'
+    : '';
   fPessoa.innerHTML='<option value="">Todas</option>'+S.pessoas.map(p=>'<option value="'+p.id+'">'+p.nome+'</option>').join('');
   const rp=rPessoa; const at=rp.value;
   rp.innerHTML=S.pessoas.map(p=>'<option value="'+p.id+'">'+p.nome+'</option>').join('');
@@ -7462,7 +7504,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.56.0';
+const VERSAO = '3.57.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -7570,7 +7612,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, {confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, pctProducaoPorRitmo, pctDoRitmo, setOverride, limparOverride, ajustarPremio});
+Object.assign(window, { sincronizarMetas, confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, pctProducaoPorRitmo, pctDoRitmo, setOverride, limparOverride, ajustarPremio});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
