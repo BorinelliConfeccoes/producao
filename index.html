@@ -3828,6 +3828,9 @@ function refPonderada(opId){
    A margem é declarada na tela, nunca escondida. */
 function margemApur(){ const m=Number(S.cfg&&S.cfg.margemApur); return (isNaN(m)||m<0)? 2 : m; }
 function tolDe(meta){ return Math.max(1, meta*(margemApur()/100)); }
+// folga extra: quem está a até 2 peças/h do alvo (já com a margem %) sobe de faixa.
+// erro de contagem de 1-2 peças não pode segurar alguém numa faixa abaixo.
+const FOLGA_PECAS=2;
 function faixaDe(opKey, rate){
   const [m70,m80,m90,m100]=metasDe(opKey);
   // sem meta definida: NÃO inventa porcentagem. Porcentagem só existe contra a meta 70/80/90/100.
@@ -3839,7 +3842,7 @@ function faixaDe(opKey, rate){
     if(!meta) continue;
     if(rate>=meta) return {tx, cls, pct, falta:0, alvo:null, alvoTx:'', margem:false,
                            prox:(i===0? null : niveis[i-1])};
-    if(rate>=meta-tolDe(meta)) return {tx:tx+'*', cls, pct, falta:0, alvo:null, alvoTx:'', margem:true,
+    if(rate>=meta-tolDe(meta)-FOLGA_PECAS) return {tx:tx+'*', cls, pct, falta:0, alvo:null, alvoTx:'', margem:true,
                            prox:(i===0? null : niveis[i-1])};
   }
   return {tx:'Abaixo de 70%', cls:'fx-abx', pct, falta:m70-rate, alvo:m70, alvoTx:'70%', margem:false, prox:[m70,'70%','fx-70']};
@@ -3850,7 +3853,7 @@ function faltaPra(opKey, rate, horas){
   if(!m70) return '';
   const niveis=[[m70,'70%'],[m80,'80%'],[m90,'90%'],[m100,'100%']].filter(n=>n[0]);
   for(const [meta,tx] of niveis){
-    const alvo = meta - tolDe(meta);
+    const alvo = meta - tolDe(meta) - FOLGA_PECAS;
     if(rate < alvo){
       const dif = alvo - rate;
       const pcs = horas? Math.ceil(dif*horas) : 0;
@@ -6719,11 +6722,12 @@ function pctProducaoPorRitmo(ym, pid){
 // converte um ritmo (pçs/h) no percentual, interpolando entre as faixas
 function pctDoRitmo(ritmo, metas){
   const [m70,m80,m90,m100]=metas;
-  if(ritmo>=m100) return 100;
-  if(ritmo>=m90)  return 90 + (ritmo-m90)/(m100-m90)*10;
-  if(ritmo>=m80)  return 80 + (ritmo-m80)/(m90-m80)*10;
-  if(ritmo>=m70)  return 70 + (ritmo-m70)/(m80-m70)*10;
-  // abaixo de 70%: proporcional até 0
+  // margem de apuração + folga de peças: quem está coladinho na faixa sobe (erro de contagem).
+  const folga=(m)=> m - tolDe(m) - FOLGA_PECAS;
+  if(ritmo>=folga(m100)) return 100;
+  if(ritmo>=folga(m90))  return 90 + (ritmo-m90)/(m100-m90)*10;
+  if(ritmo>=folga(m80))  return 80 + (ritmo-m80)/(m90-m80)*10;
+  if(ritmo>=folga(m70))  return 70 + (ritmo-m70)/(m80-m70)*10;
   return Math.max(0, Math.round(ritmo/m70*70));
 }
 function calcularPremio(ym, pid, metaMensalCamisetas){
@@ -7557,7 +7561,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.61.0';
+const VERSAO = '3.62.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
