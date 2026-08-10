@@ -3446,7 +3446,21 @@ function metasDe(opKey){
    Métrica só serve se a pessoa reconhecer. Então tudo aqui aponta pra algo
    que ela sente no dia: a hora em que cai, o tempo parada esperando, a
    operação em que está longe da meta e quem na célula faz melhor. */
-function opBaseDe(c){ return (c.opKey||c.op||'').split('|')[0]; }
+// mapa fixo de consolidação das laterais: arremate não conta, 0-1 etiqueta = LATERAL
+const CONSOLIDA_OP={
+  'LATERALARREMATE':'LATERAL',
+  'LATERALARREMATE1ETIQ':'LATERAL',
+  'LATERAL1ETIQ':'LATERAL',
+  'LATERALARREMATE2ETIQ':'LATERAL2ETIQ',
+  'LATERALARREMATE3ETIQ':'LATERAL3ETIQ'
+};
+function opBaseDe(c){
+  const base=(c.opKey||c.op||'').split('|')[0];
+  return CONSOLIDA_OP[base] || base;
+}
+function rotuloConsolidado(base){
+  return {'LATERAL':'Lateral','LATERAL2ETIQ':'Lateral com 2 etiquetas','LATERAL3ETIQ':'Lateral com 3 etiquetas'}[base];
+}
 function ciclosDe(pid, dias, de, ate){
   const desde = (de!=null)? de : ((dias>=9999)? 0 : Date.now()-dias*86400000);
   const teto  = (ate!=null)? ate : Infinity;
@@ -3617,7 +3631,7 @@ function analisePessoa(pid, dias, de, ate){
 
   const porOp={};
   meus.forEach(c=>{ const k=opBaseDe(c);
-    if(!porOp[k]) porOp[k]={rotulo:c.rotulo, pcs:0, ms:0};
+    if(!porOp[k]) porOp[k]={rotulo:rotuloConsolidado(k)||c.rotulo, pcs:0, ms:0};
     porOp[k].pcs+=qtdEfetiva(c); porOp[k].ms+=tempoUtil(c); });
   const ops=Object.entries(porOp).map(([k,g])=>{
     const h=g.ms/3600000, md=g.pcs/h;
@@ -3640,7 +3654,7 @@ function analisePessoa(pid, dias, de, ate){
   const porDiaP={};
   meus.forEach(c=>{ const d=fmtData(c.ini); if(!porDiaP[d]) porDiaP[d]={pcs:0, ms:0, ops:{}};
     porDiaP[d].pcs+=qtdEfetiva(c); porDiaP[d].ms+=tempoUtil(c);
-    const rot=c.rotulo||opBaseDe(c);
+    const rot=rotuloConsolidado(opBaseDe(c))||c.rotulo||opBaseDe(c);
     porDiaP[d].ops[rot]=(porDiaP[d].ops[rot]||0)+qtdEfetiva(c); });
   // operação principal do dia = a de maior volume naquele dia
   const opDoDia=(g)=>{ const e=Object.entries(g.ops||{}).sort((a,b)=>b[1]-a[1])[0]; return e? e[0] : ''; };
@@ -5278,8 +5292,8 @@ function renderCronoHist(){
     if(!porMes[k]) porMes[k]={ops:0, pessoas:new Set(), porOp:{}};
     const m=porMes[k];
     const q=qtdEfetiva(c);
-    const base=(c.opKey||c.op||'').split('|')[0];
-    const rot=c.rotulo||base;
+    const base=opBaseDe(c);
+    const rot=rotuloConsolidado(base)||c.rotulo||base;
     m.ops+=q; m.pessoas.add(c.pessoa);
     m.porOp[rot]=(m.porOp[rot]||0)+q;
     opsTotais[rot]=(opsTotais[rot]||0)+q;
@@ -6043,8 +6057,8 @@ function renderRelat(){
   // por opKey
   const porOp={};
   ciclos.forEach(c=>{
-    const k=c.opKey;
-    if(!porOp[k]) porOp[k]={rotulo:c.rotulo, n:0, pcs:0, ms:0, dias:new Set()};
+    const k=opBaseDe(c);
+    if(!porOp[k]) porOp[k]={rotulo:rotuloConsolidado(k)||c.rotulo, n:0, pcs:0, ms:0, dias:new Set()};
     const g=porOp[k]; g.n++; g.pcs+=qtdEfetiva(c); g.ms+=tempoUtil(c); g.dias.add(fmtData(c.ini));
   });
   let html='<div class="card"><h2 style="margin-top:0;">'+p.nome+' · '+P.rotulo+'</h2>';
@@ -6679,8 +6693,8 @@ function pctProducaoPorRitmo(ym, pid){
     if(!c.fim || c.flag || c.pessoa!==pid) return;
     const d=new Date(c.ini);
     if(d.getFullYear()!==y || d.getMonth()!==mo-1) return;
-    const base=(c.opKey||c.op||'').split('|')[0];
-    if(!porOp[base]) porOp[base]={pcs:0, ms:0, rotulo:c.rotulo, origem:new Set()};
+    const base=opBaseDe(c);
+    if(!porOp[base]) porOp[base]={pcs:0, ms:0, rotulo:rotuloConsolidado(base)||c.rotulo, origem:new Set()};
     porOp[base].pcs+=qtdEfetiva(c); porOp[base].ms+=tempoUtil(c);
     porOp[base].origem.add(c.importado? 'planilha' : 'bipagem');
   });
@@ -7083,12 +7097,12 @@ function renderDiaDia(){
   // agrupa TUDO por operação-mãe (laterais = soma de todas as variações)
   const porMae={};
   doDia.forEach(c=>{
-    const base=(c.opKey||c.op||'').split('|')[0];
+    const base=opBaseDe(c);
     const mae=nomeMae(base, c.rotulo);
     if(!porMae[mae]) porMae[mae]={mae, pcs:0, ms:0, variacoes:{}};
     const g=porMae[mae];
     g.pcs+=qtdEfetiva(c); g.ms+=tempoUtil(c);
-    const rot=c.rotulo||base;
+    const rot=rotuloConsolidado(base)||c.rotulo||base;
     g.variacoes[rot]=(g.variacoes[rot]||0)+qtdEfetiva(c);
   });
   const totalPcs=doDia.reduce((s,c)=>s+qtdEfetiva(c),0);
@@ -7125,9 +7139,9 @@ function renderDiaDia(){
   const desemp=[];
   const porPessoaOp={};
   doDia.forEach(c=>{
-    const base=(c.opKey||c.op||'').split('|')[0];
+    const base=opBaseDe(c);
     const k=c.pessoa+'|'+base;
-    if(!porPessoaOp[k]) porPessoaOp[k]={pessoa:c.pessoa, base, rotulo:c.rotulo||base, pcs:0, ms:0};
+    if(!porPessoaOp[k]) porPessoaOp[k]={pessoa:c.pessoa, base, rotulo:rotuloConsolidado(base)||c.rotulo||base, pcs:0, ms:0};
     porPessoaOp[k].pcs+=qtdEfetiva(c); porPessoaOp[k].ms+=tempoUtil(c);
   });
   Object.values(porPessoaOp).forEach(x=>{
@@ -7544,7 +7558,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.59.0';
+const VERSAO = '3.60.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
