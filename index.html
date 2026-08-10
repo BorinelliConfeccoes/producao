@@ -3724,16 +3724,15 @@ function analisePessoa(pid, dias, de, ate){
     const boa=ord[0], ruim=ord[ord.length-1];
     const ref=Math.min(boa.pct, 100);   // não faz sentido pedir para manter acima da meta o dia todo
     // soma o que cada hora fraca deixa na mesa se rodasse no ritmo da melhor hora
-    let ganho=0; const fracas=[];
+    let ganho=0;
     curvaCmp.forEach(c=>{
       if(c.pct >= ref-5) return;
       const esperado=c.pcs/(c.pct/100);
       ganho += ((ref-c.pct)/100)*esperado;
-      fracas.push(c.h);
     });
     ganho=ganho/nDias;
     if(ruim.pct < ref-8 && ganho>=10) cands.push({ganho, tag:'ritmo do dia',
-      txt:'Comparando cada hora com o padrão da operação que rodou nela: às '+String(boa.h).padStart(2,'0')+'h você fica em '+Math.round(boa.pct)+'% e às '+String(ruim.h).padStart(2,'0')+'h cai para '+Math.round(ruim.pct)+'%'+(fracas.length>1? ' (as horas mais fracas são '+fracas.map(h=>String(h).padStart(2,'0')+'h').join(', ')+')' : '')+'. Segurar o ritmo nesses horários vale cerca de '+Math.round(ganho)+' peças por dia.'});
+      txt:'Comparando cada hora com o padrão da operação que rodou nela: às '+String(boa.h).padStart(2,'0')+'h você fica em '+Math.round(boa.pct)+'% e às '+String(ruim.h).padStart(2,'0')+'h cai para '+Math.round(ruim.pct)+'%. Segurar o ritmo nesses horários vale cerca de '+Math.round(ganho)+' peças por dia.'});
   }
   if(tro && tro.perdaDia>0 && tro.trocasDia>=1){
     const ganho=tro.perdaDia;
@@ -7558,7 +7557,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.60.0';
+const VERSAO = '3.61.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
