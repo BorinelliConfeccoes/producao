@@ -3530,6 +3530,15 @@ function custoTroca(ciclos){
           horasTrocaDia: dias? hTroca/dias : 0};
 }
 /* monta ponto forte + a melhor sugestão, sempre com número em peça por dia */
+/* percentual geral da pessoa: média ponderada pelas horas, só operações COM meta.
+   retorna null quando nenhuma operação dela tem meta cadastrada. */
+function pctGeralPessoa(a){
+  if(!a || !a.ops) return null;
+  const comMeta=a.ops.filter(o=>o.temMeta && o.pct!==null);
+  if(!comMeta.length) return null;
+  const soma=comMeta.reduce((s,o)=>s+o.pct*o.horas,0), peso=comMeta.reduce((s,o)=>s+o.horas,0);
+  return peso? Math.round(Math.min(100,soma/peso)) : null;
+}
 function analisePessoa(pid, dias, de, ate){
   const meus=ciclosDe(pid, dias, de, ate);
   if(meus.length<3) return null;
@@ -3562,9 +3571,13 @@ function analisePessoa(pid, dias, de, ate){
      Reconhecimento genérico não gera nada. O que muda a conversa é o maior número
      que a pessoa realmente fez, com data e quantidade, porque ela lembra daquele dia. */
   const porDiaP={};
-  meus.forEach(c=>{ const d=fmtData(c.ini); if(!porDiaP[d]) porDiaP[d]={pcs:0, ms:0};
-    porDiaP[d].pcs+=qtdEfetiva(c); porDiaP[d].ms+=tempoUtil(c); });
-  const diasLista=Object.entries(porDiaP).map(([d,g])=>({d, pcs:g.pcs, media:g.ms>0? g.pcs/(g.ms/3600000) : 0}));
+  meus.forEach(c=>{ const d=fmtData(c.ini); if(!porDiaP[d]) porDiaP[d]={pcs:0, ms:0, ops:{}};
+    porDiaP[d].pcs+=qtdEfetiva(c); porDiaP[d].ms+=tempoUtil(c);
+    const rot=c.rotulo||opBaseDe(c);
+    porDiaP[d].ops[rot]=(porDiaP[d].ops[rot]||0)+qtdEfetiva(c); });
+  // operação principal do dia = a de maior volume naquele dia
+  const opDoDia=(g)=>{ const e=Object.entries(g.ops||{}).sort((a,b)=>b[1]-a[1])[0]; return e? e[0] : ''; };
+  const diasLista=Object.entries(porDiaP).map(([d,g])=>({d, pcs:g.pcs, media:g.ms>0? g.pcs/(g.ms/3600000) : 0, op:opDoDia(g)}));
   // O dia de maior volume pode ser justamente o dia mais lento (ela trabalhou mais horas,
   // ou juntou duas operações). Elogiar esse dia é o oposto do que se quer, e ela percebe.
   // Então: maior volume ENTRE os dias em que o ritmo ficou pelo menos na média dela.
@@ -3579,14 +3592,14 @@ function analisePessoa(pid, dias, de, ate){
   const destaqueLinhas=[];
   // NUNCA comparar com outras pessoas, nem exibir volume bruto como elogio.
   // A folha é entregue à pessoa: fala só do desempenho dela contra a meta dela.
-  if(recorde) destaqueLinhas.push('Seu melhor dia foi '+recorde.d+': '+Math.round(recorde.media)+' pçs/h.');
+  if(recorde) destaqueLinhas.push('Seu melhor dia foi '+recorde.d+(recorde.op?', fazendo '+recorde.op:'')+': '+Math.round(recorde.media)+' pçs/h.');
   // pior dia (só sobre ela mesma, sem comparar com ninguém)
   let pior=null;
   if(nDias>=3 && diasLista.length>1){
     const comRitmo=diasLista.filter(d=>d.media>0);
     if(comRitmo.length>1) pior=comRitmo.reduce((x,y)=>y.media<x.media?y:x);
   }
-  if(pior && recorde && pior.d!==recorde.d) destaqueLinhas.push('Seu dia mais puxado foi '+pior.d+': '+Math.round(pior.media)+' pçs/h.');
+  if(pior && recorde && pior.d!==recorde.d) destaqueLinhas.push('Seu dia mais puxado foi '+pior.d+(pior.op?', fazendo '+pior.op:'')+': '+Math.round(pior.media)+' pçs/h.');
   if(destaque && destaque.temMeta) destaqueLinhas.push('Sua melhor faixa é '+destaque.rotulo+', '+Math.round(destaque.media)+' pçs/h na faixa '+destaque.faixa+'.');
 
   /* ---- o toque: o empurrãozinho sai de dentro do ponto forte, não de uma cobrança
@@ -3685,13 +3698,12 @@ function grafCurva(curva, mediaGeral){
 }
 /* tabela de operações com barra de meta */
 function tabelaOps(ops){
-  let h='<table><tr><th>Operação</th><th>Peças</th><th>Média</th><th>Meta 100%</th><th>Faixa</th><th>Para subir</th></tr>';
+  let h='<table><tr><th>Operação</th><th>Seu ritmo</th><th>Meta 100%</th><th>Faixa</th></tr>';
   ops.forEach(o=>{
-    const barra = o.meta? '<div style="background:#e2e0d6; border-radius:3px; height:8px; width:110px; margin-top:4px;"><div style="height:8px; border-radius:3px; width:'+Math.min(100,Math.round((o.media/o.meta)*100))+'%; background:'+(o.media>=o.meta?'#3d4d32':'#b06b3a')+';"></div></div>' : '';
-    h+='<tr><td><b>'+o.rotulo+'</b>'+barra+'</td><td>'+o.pcs+'</td><td><b>'+Math.round(o.media)+'</b> pçs/h</td>'+
-       '<td>'+(o.meta? Math.round(o.meta) : '—')+'</td>'+
-       '<td><span class="faixa '+o.cls+'"'+(o.margem?' title="subiu de faixa pela margem de apuração"':'')+'>'+o.faixa+'</span></td>'+
-       '<td class="mini-info">'+(o.falta||'—')+'</td></tr>';
+    h+='<tr><td><b>'+o.rotulo+'</b></td>'+
+       '<td><b>'+Math.round(o.media)+'</b> pçs/h</td>'+
+       '<td>'+(o.meta? Math.round(o.meta)+' pçs/h' : '—')+'</td>'+
+       '<td><span class="faixa '+o.cls+'"'+(o.margem?' title="subiu de faixa pela margem de apuração"':'')+'>'+(o.temMeta? o.faixa : 'sem meta')+'</span></td></tr>';
   });
   return h+'</table>';
 }
@@ -4412,9 +4424,7 @@ function renderMinha(){
 
   let html='<div class="card"><h2 style="margin-top:0;">Olá, '+p.nome+'!</h2>'+
     '<div style="display:flex; gap:24px; flex-wrap:wrap; margin-top:8px;">'+
-    '<div><div class="mini-info">PEÇAS</div><div style="font-size:1.8rem; font-weight:800;">'+a.totPcs+'</div></div>'+
-    '<div><div class="mini-info">HORAS</div><div style="font-size:1.8rem; font-weight:800;">'+fmtH(a.totMs)+'</div></div>'+
-    '<div><div class="mini-info">MÉDIA</div><div style="font-size:1.8rem; font-weight:800;">'+Math.round(a.media)+' <span style="font-size:.9rem;">pçs/h</span></div></div>'+
+    (pctGeralPessoa(a)!=null? '<div><div class="mini-info">DA META</div><div style="font-size:1.8rem; font-weight:800;">'+pctGeralPessoa(a)+'%</div></div>' : '')+
     '<div><div class="mini-info">DIAS</div><div style="font-size:1.8rem; font-weight:800;">'+a.nDias+'</div></div>'+
     '</div></div>';
 
@@ -6199,24 +6209,18 @@ function renderPainelCelula(){
         '<div><h3 style="margin:0;">'+nome+'</h3>'+
           '<div class="mini-info">'+rotuloPer+' · '+a.nDias+' dias trabalhados</div></div>'+
         '<div class="fichaNums">'+
-          '<div><div class="mini-info">PEÇAS</div><div class="fichaNum">'+a.totPcs+'</div></div>'+
-          '<div><div class="mini-info">HORAS</div><div class="fichaNum">'+fmtH(a.totMs)+'</div></div>'+
           '<div><div class="mini-info">DA META</div><div class="fichaNum" style="color:'+cor+';">'+gTx+'</div></div>'+
         '</div>'+
       '</div>';
 
-    html+='<table style="margin-top:12px;"><tr><th>Operação</th><th>Peças</th><th>Horas</th>'+
-      '<th>Seu ritmo</th><th>Meta 100%</th><th>Onde você está</th><th>Faixa</th><th>Para subir de faixa</th></tr>';
+    html+='<table style="margin-top:12px;"><tr><th>Operação</th>'+
+      '<th>Seu ritmo</th><th>Meta 100%</th><th>Faixa</th></tr>';
     a.ops.forEach(o=>{
       html+='<tr>'+
         '<td><b>'+o.rotulo+'</b></td>'+
-        '<td>'+o.pcs+'</td>'+
-        '<td>'+o.horas.toFixed(1).replace('.',',')+'</td>'+
         '<td><b>'+Math.round(o.media)+'</b> pçs/h</td>'+
         '<td>'+(o.meta? Math.round(o.meta)+' pçs/h' : '<span style="color:#b23b3b;">não cadastrada</span>')+'</td>'+
-        '<td>'+barraMeta(o.media, o.meta)+'</td>'+
-        '<td><span class="faixa '+o.cls+'"'+(o.margem?' title="subiu pela margem de apuração"':'')+'>'+o.faixa+'</span></td>'+
-        '<td class="mini-info">'+((o.falta && o.falta!=='faixa máxima')? o.falta : '🏆 faixa máxima')+'</td>'+
+        '<td><span class="faixa '+o.cls+'"'+(o.margem?' title="subiu pela margem de apuração"':'')+'>'+(o.temMeta? o.faixa : 'sem meta')+'</span></td>'+
       '</tr>';
     });
     html+='</table>';
@@ -7413,7 +7417,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.52.0';
+const VERSAO = '3.55.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
