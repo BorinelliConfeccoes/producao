@@ -3573,17 +3573,21 @@ function analisePessoa(pid, dias, de, ate){
     const bons=diasLista.filter(d=>d.media>=media);
     recorde=(bons.length? bons : diasLista).reduce((x,y)=>y.pcs>x.pcs?y:x);
   }
-  const maiorVol = ops.length? ops.slice().sort((a,b)=>b.pcs-a.pcs)[0] : null;
   const comMeta=ops.filter(o=>o.temMeta && o.pct!==null);
   const destaque = comMeta.length? comMeta.slice().sort((a,b)=>b.pct-a.pct)[0] : ops[0];
-  const lidera = ops.filter(o=>o.melhor && o.media>=o.melhor.rate && o.horas>=3);
 
   const destaqueLinhas=[];
-  if(maiorVol) destaqueLinhas.push('Você fez '+maiorVol.pcs+' peças em '+maiorVol.rotulo+
-    (ops.length>1? ', o seu maior volume no período' : ' no período')+'.');
-  if(recorde) destaqueLinhas.push('Seu melhor dia foi '+recorde.d+': '+recorde.pcs+' peças, '+Math.round(recorde.media)+' pçs/h.');
-  if(lidera.length) destaqueLinhas.push('Você é a mais rápida da célula em '+lidera.map(o=>o.rotulo).join(' e ')+'.');
-  else if(destaque && destaque.temMeta) destaqueLinhas.push('Sua melhor faixa é '+destaque.rotulo+', '+Math.round(destaque.media)+' pçs/h na faixa '+destaque.faixa+'.');
+  // NUNCA comparar com outras pessoas, nem exibir volume bruto como elogio.
+  // A folha é entregue à pessoa: fala só do desempenho dela contra a meta dela.
+  if(recorde) destaqueLinhas.push('Seu melhor dia foi '+recorde.d+': '+Math.round(recorde.media)+' pçs/h.');
+  // pior dia (só sobre ela mesma, sem comparar com ninguém)
+  let pior=null;
+  if(nDias>=3 && diasLista.length>1){
+    const comRitmo=diasLista.filter(d=>d.media>0);
+    if(comRitmo.length>1) pior=comRitmo.reduce((x,y)=>y.media<x.media?y:x);
+  }
+  if(pior && recorde && pior.d!==recorde.d) destaqueLinhas.push('Seu dia mais puxado foi '+pior.d+': '+Math.round(pior.media)+' pçs/h.');
+  if(destaque && destaque.temMeta) destaqueLinhas.push('Sua melhor faixa é '+destaque.rotulo+', '+Math.round(destaque.media)+' pçs/h na faixa '+destaque.faixa+'.');
 
   /* ---- o toque: o empurrãozinho sai de dentro do ponto forte, não de uma cobrança
      separada. Converter a diferença em "uma peça a cada X" tira o número do abstrato. ---- */
@@ -3612,7 +3616,6 @@ function analisePessoa(pid, dias, de, ate){
     const dif=Number(difMatch[1]);
     const ganho=dif*o.horasDia;
     let txt='Em '+o.rotulo+' você está em '+Math.round(o.media)+' pçs/h e '+alvoTx.replace(/ \(.*\)$/,'')+'.';
-    if(o.melhor && o.melhor.rate>o.media+2) txt+=' '+o.melhor.nome+' faz '+Math.round(o.melhor.rate)+' pçs/h na mesma operação, vale ver como ela pega a peça.';
     txt+=' Fechando essa diferença são cerca de '+Math.round(ganho)+' peças a mais por dia.';
     cands.push({ganho, txt, tag:'operação', op:o.key});
   });
@@ -3655,7 +3658,7 @@ function analisePessoa(pid, dias, de, ate){
   const outrasFinal = cands2.filter(c=>c!==sugestaoFinal && c.op!==opDoToque).slice(0,2);
 
   return {totPcs, totMs, nDias, media, horasDia, ops, curva, paradas:par, troca:tro,
-          destaque, destaqueTx, destaqueLinhas, toque, recorde, maiorVol,
+          destaque, destaqueTx, destaqueLinhas, toque, recorde,
           sugestao:sugestaoFinal, outras:outrasFinal};
 }
 /* barrinha simples de horas, sem biblioteca, no estilo do resto do app */
@@ -3682,13 +3685,12 @@ function grafCurva(curva, mediaGeral){
 }
 /* tabela de operações com barra de meta */
 function tabelaOps(ops){
-  let h='<table><tr><th>Operação</th><th>Peças</th><th>Média</th><th>Meta 100%</th><th>Faixa</th><th>Melhor da célula</th><th>Para subir</th></tr>';
+  let h='<table><tr><th>Operação</th><th>Peças</th><th>Média</th><th>Meta 100%</th><th>Faixa</th><th>Para subir</th></tr>';
   ops.forEach(o=>{
     const barra = o.meta? '<div style="background:#e2e0d6; border-radius:3px; height:8px; width:110px; margin-top:4px;"><div style="height:8px; border-radius:3px; width:'+Math.min(100,Math.round((o.media/o.meta)*100))+'%; background:'+(o.media>=o.meta?'#3d4d32':'#b06b3a')+';"></div></div>' : '';
     h+='<tr><td><b>'+o.rotulo+'</b>'+barra+'</td><td>'+o.pcs+'</td><td><b>'+Math.round(o.media)+'</b> pçs/h</td>'+
        '<td>'+(o.meta? Math.round(o.meta) : '—')+'</td>'+
        '<td><span class="faixa '+o.cls+'"'+(o.margem?' title="subiu de faixa pela margem de apuração"':'')+'>'+o.faixa+'</span></td>'+
-       '<td class="mini-info">'+(o.melhor? o.melhor.nome+' · '+Math.round(o.melhor.rate)+' pçs/h' : '—')+'</td>'+
        '<td class="mini-info">'+(o.falta||'—')+'</td></tr>';
   });
   return h+'</table>';
@@ -7411,7 +7413,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.51.0';
+const VERSAO = '3.52.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
