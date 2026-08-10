@@ -3532,6 +3532,26 @@ function custoTroca(ciclos){
 /* monta ponto forte + a melhor sugestão, sempre com número em peça por dia */
 /* percentual geral da pessoa: média ponderada pelas horas, só operações COM meta.
    retorna null quando nenhuma operação dela tem meta cadastrada. */
+/* soma faltas, atestados, atrasos e saídas de uma pessoa entre duas datas (ou nos últimos N dias).
+   percorre os meses que o período cobre em S.presenca. */
+function presencaPeriodo(pid, de, ate){
+  const tot={faltas:0, atestados:0, atrasos:0, saidas:0};
+  if(!S.presenca) return tot;
+  // limites do período
+  let ini, fim;
+  if(de && ate){ ini=new Date(de); fim=new Date(ate); }
+  else { fim=new Date(); ini=new Date(); ini.setDate(ini.getDate()-(Number(de)||30)); }
+  Object.keys(S.presenca).forEach(ym=>{
+    const [y,mo]=ym.split('-').map(Number);
+    // o mês inteiro cai dentro do período? (checa se o mês intersecta o intervalo)
+    const mIni=new Date(y,mo-1,1), mFim=new Date(y,mo,0,23,59);
+    if(mFim<ini || mIni>fim) return;
+    const p=S.presenca[ym][pid]; if(!p) return;
+    tot.faltas+=p.faltas||0; tot.atestados+=p.atestados||0;
+    tot.atrasos+=p.atrasos||0; tot.saidas+=p.saidas||0;
+  });
+  return tot;
+}
 function pctGeralPessoa(a){
   if(!a || !a.ops) return null;
   const comMeta=a.ops.filter(o=>o.temMeta && o.pct!==null);
@@ -3542,6 +3562,13 @@ function pctGeralPessoa(a){
 function analisePessoa(pid, dias, de, ate){
   const meus=ciclosDe(pid, dias, de, ate);
   if(meus.length<3) return null;
+  // faltas do período: usa o intervalo real dos ciclos quando não vier de/ate
+  let deReal=de, ateReal=ate;
+  if(!deReal || !ateReal){
+    const ts=meus.map(c=>c.ini).sort((a,b)=>a-b);
+    deReal=ts[0]; ateReal=ts[ts.length-1];
+  }
+  const presenca=presencaPeriodo(pid, deReal, ateReal);
   const totPcs=meus.reduce((s,c)=>s+qtdEfetiva(c),0);
   const totMs=meus.reduce((s,c)=>s+tempoUtil(c),0);
   const nDias=new Set(meus.map(c=>fmtData(c.ini))).size || 1;
@@ -3672,7 +3699,7 @@ function analisePessoa(pid, dias, de, ate){
 
   return {totPcs, totMs, nDias, media, horasDia, ops, curva, paradas:par, troca:tro,
           destaque, destaqueTx, destaqueLinhas, toque, recorde,
-          sugestao:sugestaoFinal, outras:outrasFinal};
+          sugestao:sugestaoFinal, outras:outrasFinal, presenca};
 }
 /* barrinha simples de horas, sem biblioteca, no estilo do resto do app */
 function grafCurva(curva, mediaGeral){
@@ -4422,11 +4449,20 @@ function renderMinha(){
   const a=analisePessoa(p.id, dias);
   if(!a){ box.innerHTML='<div class="card"><h2 style="margin-top:0;">Olá, '+p.nome+'!</h2><div class="mini-info">Ainda não há produção suficiente neste período.</div></div>'; return; }
 
+  const prM=a.presenca||{faltas:0,atestados:0,atrasos:0,saidas:0};
+  const presM=[];
+  if(prM.faltas) presM.push(prM.faltas+' falta'+(prM.faltas>1?'s':'')+' s/ justificativa');
+  if(prM.atestados) presM.push(prM.atestados+' atestado'+(prM.atestados>1?'s':''));
+  if(prM.atrasos) presM.push(prM.atrasos+' atraso'+(prM.atrasos>1?'s':''));
+  if(prM.saidas) presM.push(prM.saidas+' saída'+(prM.saidas>1?'s':'')+' antecipada'+(prM.saidas>1?'s':''));
+  const linhaPresM = presM.length
+    ? '<div class="mini-info" style="color:#b23b3b; margin-top:6px;">⚠ '+presM.join(' · ')+'</div>'
+    : '<div class="mini-info" style="color:#4d7c2a; margin-top:6px;">✓ Sem faltas no período</div>';
   let html='<div class="card"><h2 style="margin-top:0;">Olá, '+p.nome+'!</h2>'+
     '<div style="display:flex; gap:24px; flex-wrap:wrap; margin-top:8px;">'+
     (pctGeralPessoa(a)!=null? '<div><div class="mini-info">DA META</div><div style="font-size:1.8rem; font-weight:800;">'+pctGeralPessoa(a)+'%</div></div>' : '')+
     '<div><div class="mini-info">DIAS</div><div style="font-size:1.8rem; font-weight:800;">'+a.nDias+'</div></div>'+
-    '</div></div>';
+    '</div>'+linhaPresM+'</div>';
 
   html+=cardSugestao(a);
 
@@ -6204,10 +6240,19 @@ function renderPainelCelula(){
     const g=pctGeral(a);
     const gTx = g===999? '—' : Math.round(g)+'%';
     const cor = g===999? '#666' : (g>=100?'#3d4d32': g>=80?'#8a7a2e':'#b06b3a');
+    const pr=a.presenca||{faltas:0,atestados:0,atrasos:0,saidas:0};
+    const presTxt=[];
+    if(pr.faltas) presTxt.push(pr.faltas+' falta'+(pr.faltas>1?'s':'')+' s/ justificativa');
+    if(pr.atestados) presTxt.push(pr.atestados+' atestado'+(pr.atestados>1?'s':''));
+    if(pr.atrasos) presTxt.push(pr.atrasos+' atraso'+(pr.atrasos>1?'s':''));
+    if(pr.saidas) presTxt.push(pr.saidas+' saída'+(pr.saidas>1?'s':'')+' antecipada'+(pr.saidas>1?'s':''));
+    const linhaPres = presTxt.length
+      ? '<div class="mini-info" style="color:#b23b3b; margin-top:2px;">⚠ '+presTxt.join(' · ')+'</div>'
+      : '<div class="mini-info" style="color:#4d7c2a; margin-top:2px;">✓ Sem faltas no período</div>';
     html+='<div class="card ficha quebrapagina" style="border-left:5px solid '+cor+';">'+
       '<div class="fichaTop">'+
         '<div><h3 style="margin:0;">'+nome+'</h3>'+
-          '<div class="mini-info">'+rotuloPer+' · '+a.nDias+' dias trabalhados</div></div>'+
+          '<div class="mini-info">'+rotuloPer+' · '+a.nDias+' dias trabalhados</div>'+linhaPres+'</div>'+
         '<div class="fichaNums">'+
           '<div><div class="mini-info">DA META</div><div class="fichaNum" style="color:'+cor+';">'+gTx+'</div></div>'+
         '</div>'+
@@ -7417,7 +7462,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.55.0';
+const VERSAO = '3.56.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
