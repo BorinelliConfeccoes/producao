@@ -3054,14 +3054,9 @@ const OPS_BASE = [
  // --- LATERAL: a tabela oficial tem UMA linha (75/80/90/100), que vale para
  // "lateral sem etiqueta" e "lateral com 1 etiqueta". As demais variações não têm
  // meta na tabela: ficam zeradas de propósito, pra calibrar pela média real. ---
- {id:'LATERAL', nome:'Lateral (sem etiqueta)', metas:[75,80,90,100]},
- {id:'LATERAL1ETIQ', nome:'Lateral com 1 etiqueta', metas:[75,80,90,100]},
+ {id:'LATERAL', nome:'Lateral', metas:[75,80,90,100]},
  {id:'LATERAL2ETIQ', nome:'Lateral com 2 etiquetas', metas:[0,0,0,0]},
  {id:'LATERAL3ETIQ', nome:'Lateral com 3 etiquetas', metas:[0,0,0,0]},
- {id:'LATERALARREMATE', nome:'Lateral com arremate (sem etiqueta)', metas:[0,0,0,0]},
- {id:'LATERALARREMATE1ETIQ', nome:'Lateral com arremate e 1 etiqueta', metas:[0,0,0,0]},
- {id:'LATERALARREMATE2ETIQ', nome:'Lateral com arremate e 2 etiquetas', metas:[0,0,0,0]},
- {id:'LATERALARREMATE3ETIQ', nome:'Lateral com arremate e 3 etiquetas', metas:[0,0,0,0]},
  // --- etiqueta avulsa (quando é operação separada) ---
  {id:'ETIQUETA', nome:'Etiqueta', metas:[0,0,0,0]}
 ];
@@ -3225,6 +3220,41 @@ function migrarOpsBase(){
   S.mapaOps = {};
   S.opsBaseRev = 6;
 }
+/* consolida as variações de lateral: arremate não conta mais; 0-1 etiqueta = LATERAL.
+   roda uma vez, reescrevendo o histórico pra os números baterem. */
+function migrarLaterais(){
+  if(S.lateralRev >= 1) return;
+  const mapa={
+    'LATERALARREMATE':'LATERAL',
+    'LATERALARREMATE1ETIQ':'LATERAL',
+    'LATERAL1ETIQ':'LATERAL',
+    'LATERALARREMATE2ETIQ':'LATERAL2ETIQ',
+    'LATERALARREMATE3ETIQ':'LATERAL3ETIQ'
+  };
+  const rotulos={'LATERAL':'Lateral','LATERAL2ETIQ':'Lateral com 2 etiquetas','LATERAL3ETIQ':'Lateral com 3 etiquetas'};
+  // reescreve os ciclos do histórico
+  (S.ciclos||[]).forEach(c=>{
+    const base=(c.opKey||c.op||'').split('|')[0];
+    if(mapa[base]){
+      const resto=(c.opKey||'').includes('|')? c.opKey.slice(c.opKey.indexOf('|')) : '';
+      c.op=mapa[base];
+      c.opKey=mapa[base]+resto;
+      if(rotulos[mapa[base]]) c.rotulo=rotulos[mapa[base]];
+    } else if(base==='LATERAL' && c.rotulo && /sem etiqueta/i.test(c.rotulo)){
+      c.rotulo='Lateral';  // atualiza o nome antigo "Lateral (sem etiqueta)"
+    }
+  });
+  // limpa as metasVar das operações que sumiram
+  if(S.metasVar) Object.keys(mapa).forEach(velho=>{ delete S.metasVar[velho]; });
+  // reescreve o mapaOps: siglas que apontavam pras variações agora apontam pro consolidado
+  if(S.mapaOps) Object.keys(S.mapaOps).forEach(sig=>{ if(mapa[S.mapaOps[sig]]) S.mapaOps[sig]=mapa[S.mapaOps[sig]]; });
+  // remove as operações que sumiram da lista base, e renomeia a LATERAL
+  if(S.opsBase){
+    S.opsBase=S.opsBase.filter(o=>!mapa[o.id]);
+    const lat=S.opsBase.find(o=>o.id==='LATERAL'); if(lat) lat.nome='Lateral';
+  }
+  S.lateralRev=1;
+}
 let S = {cfg:{...CFG_PADRAO}, pessoas:PESSOAS_PADRAO, opsBase:OPS_BASE, metasVar:{}, baselines:BASELINES_PADRAO, marcas:[], ordens:[], ciclos:[]};
 let sel=null, pendingBase=null, pendingPacote=null, pendingTs=0, entradaMode=false;
 let travaBip=false, propostaAtual=null, lacPendente=null;
@@ -3268,6 +3298,7 @@ function ligarBanco(){
       aplicandoRemoto=true;
       const euTinhaMais = mesclarEstado(d);   // junta em vez de sobrescrever
       migrarOpsBase();
+      migrarLaterais();
       aplicandoRemoto=false;
       gravarLocal(JSON.stringify(S));
       renderTudo(); preencherCfg();
@@ -3346,6 +3377,7 @@ async function carregar(){
   if(v){ try{ const d=JSON.parse(v); S=Object.assign(S,d); }catch(e){} }
   // migrações
   migrarOpsBase();
+  migrarLaterais();
   S.marcas=S.marcas||[]; S.metasVar=S.metasVar||{};
   (S.ordens||[]).forEach(o=>{ o.etapas=o.etapas||[]; o.externos=o.externos||[]; o.chegadas=o.chegadas||[]; o.resolvidos=o.resolvidos||[]; });
   if(S.cfg.empacadoMin===undefined) S.cfg.empacadoMin=45;
@@ -3399,9 +3431,16 @@ function tempoUtil(c){
 function qtdEfetiva(c){ return (c.qtdReal!==undefined && c.qtdReal!==null)? c.qtdReal : c.qtd; }
 function rateDe(c){ return qtdEfetiva(c)/(tempoUtil(c)/3600000); }
 function metasDe(opKey){
-  if(S.metasVar[opKey]) return S.metasVar[opKey];
   const base=opKey.split('|')[0];
-  return (S.opsBase.find(o=>o.id===base)||{}).metas||[0,0,0,0];
+  const opBase=S.opsBase.find(o=>o.id===base);
+  const metasBase=(opBase||{}).metas||[0,0,0,0];
+  // se a operação base existe e está ZERADA (você definiu como "sem meta" na tela),
+  // isso manda: ignora qualquer meta-fantasma em metasVar. Zero na tela = sem meta no relatório.
+  if(opBase && !metasBase[0] && !metasBase[3]) return metasBase;
+  // variação específica com meta própria (ex: veio da régua de uma planilha)
+  if(S.metasVar[opKey]) return S.metasVar[opKey];
+  if(S.metasVar[base]) return S.metasVar[base];
+  return metasBase;
 }
 /* ================= ANÁLISE INDIVIDUAL =================
    Métrica só serve se a pessoa reconhecer. Então tudo aqui aponta pra algo
@@ -4974,16 +5013,17 @@ async function importarPlanilha(files){
 }
 let _impPendente=null;
 function opDaPlanilha(sigla){
-  // reconhece as variações de lateral escritas de qualquer jeito na planilha
+  // agrupamento de lateral: arremate NÃO diferencia. 0 ou 1 etiqueta = LATERAL.
+  // só 2 ou 3 etiquetas viram operação própria (com ou sem arremate).
   const s=' '+sigla+' ';
   if(/LATERAL/.test(s)){
-    const arremate=/ARREMATE/.test(s);
     let n=0;
     const m=s.match(/(\d)\s*ETIQ/); if(m) n=Number(m[1]);
     else if(/SEM\s+ETIQ/.test(s)) n=0;
     else if(/C\/?\s*ETIQ|COM\s+ETIQ/.test(s)) n=1;
-    if(arremate) return n===0? 'LATERALARREMATE' : 'LATERALARREMATE'+n+'ETIQ';
-    return n===0? 'LATERAL' : 'LATERAL'+n+'ETIQ';
+    // 0 ou 1 etiqueta (com ou sem arremate) → LATERAL
+    if(n<=1) return 'LATERAL';
+    return 'LATERAL'+n+'ETIQ';   // 2 ou 3 etiquetas
   }
   // nome igual ao da operação cadastrada
   const exato=S.opsBase.find(o=>normOp(o.nome)===sigla);
@@ -7504,7 +7544,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '3.57.0';
+const VERSAO = '3.59.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
