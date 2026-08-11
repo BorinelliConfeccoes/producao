@@ -2884,6 +2884,19 @@ nav button.oculto{display:none;}
       <button class="acao sec alerta" onclick="limparImportados()" style="margin-left:8px;">🗑 Apagar tudo que veio de planilha</button>
       <div id="cronoHist"></div>
     </div>
+
+    <div class="card" id="cardPasta">
+      <h2 style="margin-top:0;">📂 Pasta automática</h2>
+      <div class="mini-info" style="margin-bottom:10px;">Aponte a pasta das planilhas <b>uma vez</b>. Daí em diante você só salva o Excel e o sistema puxa sozinho, sem escolher arquivo. Ele entra nas subpastas de mês e de ano também. O app precisa estar aberto no computador: fechado, ele pega tudo assim que você abrir.</div>
+      <div id="pastaEstado"></div>
+      <div class="linhaform" style="margin-top:10px;">
+        <button class="acao" onclick="escolherPasta()">📂 Escolher a pasta</button>
+        <button class="acao sec" onclick="varrerPasta(true)" id="btVarrer">🔄 Conferir agora</button>
+        <button class="acao sec alerta" onclick="desligarPasta()" id="btDesligarPasta">Desligar</button>
+      </div>
+      <div id="pastaPendencias"></div>
+      <div id="pastaLog"></div>
+    </div>
   </div>
   <div class="sub on" id="sub-aj-regras">
   <div class="card">
@@ -5223,7 +5236,8 @@ function confirmarMapaOps(){
   _impPendente=null;
 }
 function cancelarMapaOps(){ _impPendente=null; ocultarModais(); }
-function gravarImportacao(todos, criadas){
+function gravarImportacao(todos, criadas, opc){
+    opc=opc||{};
     const loteId='L'+Date.now();
     // 1) junta as linhas que caem na MESMA pessoa + dia + operação (soma peças e horas, não descarta)
     const agr={};
@@ -5281,6 +5295,8 @@ function gravarImportacao(todos, criadas){
       '\nConfere se essas abas têm linha de datas, de operação e de HORAS.' : '';
     const periodo = gravadas.length? '\n\nPeríodo coberto: '+fmtD(gravadas[0])+' a '+fmtD(gravadas[gravadas.length-1])+
       '\nPor mês:\n'+linhasMes : '';
+    // varredura automática não pode abrir alert de 10 em 10 minutos na cara dele
+    if(opc.silencioso){ window._ultimoResumoImport={criados, atualizados, periodo, porMes}; return; }
     alert('Planilhas importadas.\n\n'+criados+' lançamentos criados'+
       (somados? '\n'+somados+' linhas foram SOMADAS (caíram no mesmo dia e na mesma operação)':'')+
       (atualizados? '\n'+atualizados+' já existiam e foram ATUALIZADOS com o valor novo':'')+
@@ -6636,12 +6652,46 @@ function diasUteisNoIntervalo(ini,fim){
   while(d<=fim){ const wd=d.getDay(); if(wd>=1&&wd<=5) n++; d.setDate(d.getDate()+1); }
   return Math.max(1,n);
 }
+/* Quanto a CÉLULA INTEIRA entrega por dia em cada operação, num mês fechado.
+   É diferente do "1 pessoa faz/dia" da coluna ao lado: aqui é o time todo somado.
+   Média sobre os dias em que a operação de fato rodou, não sobre os dias do mês:
+   dividir por 22 quando a operação só rodou em 6 dias inventa um número baixo
+   que não descreve dia nenhum. */
+function mediaDiaFamiliaMes(testa, ym){
+  if(!ym) return null;
+  ym=String(ym).replace(/^m:/,'');            // o seletor de período usa "m:2026-07"
+  const [y,mo]=ym.split('-').map(Number);
+  if(!y || !mo) return null;
+  const porDia={}; const pessoas=new Set();
+  (S.ciclos||[]).forEach(c=>{
+    if(!c.fim || c.flag || c.lote) return;
+    if(!testa(opBaseDe(c))) return;
+    const d=new Date(c.ini);
+    if(d.getFullYear()!==y || d.getMonth()!==mo-1) return;
+    const k=fmtData(c.ini);
+    porDia[k]=(porDia[k]||0)+qtdEfetiva(c);
+    pessoas.add(c.pessoa);
+  });
+  const dias=Object.keys(porDia);
+  if(!dias.length) return null;
+  const total=dias.reduce((s,k)=>s+porDia[k],0);
+  return {media:total/dias.length, dias:dias.length, total, pessoas:pessoas.size};
+}
+function mesAtualKey(){ const h=new Date(); return h.getFullYear()+'-'+String(h.getMonth()+1).padStart(2,'0'); }
+function rotuloMesCurto(ym){
+  if(!ym) return '';
+  ym=String(ym).replace(/^m:/,'');
+  const [y,mo]=ym.split('-');
+  if(!y || !mo) return '';
+  return new Date(Number(y),Number(mo)-1,1).toLocaleDateString('pt-BR',{month:'short'}).replace('.','')+'/'+String(y).slice(2);
+}
 function renderMeta(){
   const box=document.getElementById('metaOut'); if(!box) return;
   const meta=Number((document.getElementById('metaDia')||{}).value)||S.cfg.metaDiaria||2500;
   S.cfg.metaDiaria=meta; salvarTudo();
   const per=metaPeriodo();
   const desde=per.desde, ate=per.ate;
+  const mesAnt=String(mesAnteriorKey()).replace(/^m:/,''), mesAtu=mesAtualKey();
   const horasDia=horasUteisDia();
   const pessoasHoje=Math.max(1,(S.pessoas||[]).length);
 
@@ -6651,7 +6701,8 @@ function renderMeta(){
     const porPessoaDia=r.ritmo*horasDia;
     // quantas pessoas seriam necessárias pra fazer a meta nessa operação
     const pessoasNec=porPessoaDia>0? meta/porPessoaDia : null;
-    return {...op, ritmo:r.ritmo, porPessoaDia, pessoasNec, diasPessoa:r.diasPessoa, temDado:r.diasPessoa>0};
+    return {...op, ritmo:r.ritmo, porPessoaDia, pessoasNec, diasPessoa:r.diasPessoa, temDado:r.diasPessoa>0,
+            mAnt:mediaDiaFamiliaMes(op.testa, mesAnt), mAtu:mediaDiaFamiliaMes(op.testa, mesAtu)};
   });
 
   const comDado=linhas.filter(l=>l.temDado);
@@ -6681,16 +6732,27 @@ function renderMeta(){
   const ordenada=[...comDado].sort((a,b)=>(b.pessoasNec||0)-(a.pessoasNec||0));
   html+='<div class="card"><h3 style="margin-top:0;">Operação por operação</h3>'+
     '<div class="mini-info" style="margin-bottom:6px;">Ordenado pelo gargalo: quem precisa de mais gente pra fazer '+meta+'/dia aparece no topo.</div>'+
-    '<table><tr><th>Operação</th><th>Ritmo sustentado</th><th>1 pessoa faz/dia</th><th>Pessoas p/ '+meta+'</th></tr>';
+    '<table><tr><th>Operação</th><th>Ritmo sustentado</th><th>1 pessoa faz/dia</th><th>Pessoas p/ '+meta+'</th>'+
+    '<th>Célula/dia '+rotuloMesCurto(mesAnt)+'</th><th>Célula/dia '+rotuloMesCurto(mesAtu)+'</th><th>Variação</th></tr>';
+  const celDia=(m)=> m? '<b>'+Math.round(m.media).toLocaleString('pt-BR')+'</b> pçs <span class="mini-info">('+m.dias+' dia'+(m.dias>1?'s':'')+', '+m.pessoas+' pessoa'+(m.pessoas>1?'s':'')+')</span>' : '<span class="mini-info">sem dado</span>';
   ordenada.forEach((l,i)=>{
     const gargalo=i===0;
+    let varTx='<span class="mini-info">—</span>';
+    if(l.mAnt && l.mAtu){
+      const p=Math.round((l.mAtu.media/l.mAnt.media-1)*100);
+      varTx='<span style="color:'+(p>=0?'#4d7c2a':'#b23b3b')+'; font-weight:700;">'+(p>0?'+':'')+p+'%</span>';
+    }
     html+='<tr'+(gargalo?' style="background:#fdf2f1;"':'')+'>'+
       '<td><b>'+l.fam+'</b>'+(gargalo?' <span style="color:#b23b3b; font-weight:800;">← GARGALO</span>':'')+'</td>'+
       '<td>'+Math.round(l.ritmo)+' pçs/h</td>'+
       '<td>'+Math.round(l.porPessoaDia)+' pçs</td>'+
-      '<td><b>'+(l.pessoasNec? l.pessoasNec.toFixed(1) : '—')+'</b></td></tr>';
+      '<td><b>'+(l.pessoasNec? l.pessoasNec.toFixed(1) : '—')+'</b></td>'+
+      '<td>'+celDia(l.mAnt)+'</td>'+
+      '<td>'+celDia(l.mAtu)+'</td>'+
+      '<td>'+varTx+'</td></tr>';
   });
-  html+='</table></div>';
+  html+='</table>'+
+    '<div class="mini-info" style="margin-top:8px;">As duas colunas de <b>célula/dia</b> são o time inteiro somado, não uma pessoa. A média é sobre os dias em que aquela operação realmente rodou, e não sobre todos os dias do mês: entre parênteses vão os dias contados e quantas pessoas fizeram a operação. O mês atual está em andamento, então compare a variação com isso em mente.</div></div>';
 
   box.innerHTML=html;
 }
@@ -7679,7 +7741,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.0.0';
+const VERSAO = '4.2.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -7775,7 +7837,251 @@ document.querySelectorAll('nav button').forEach(b=>{
     renderTudo();
   });
 });
-function renderTudo(){ preencherPeriodoRelat(); renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); renderImportacoes(); renderCronoHist(); if(perfilAtivo==='costureira') renderMinha(); if(document.querySelector('#sub-relat-diadia.on')) renderDiaDia(); }
+
+/* ================= PASTA AUTOMÁTICA (v4.1.0) =================
+   O Patrick importou julho no lugar de agosto porque os dois arquivos se chamam
+   Grasi.xlsx e o seletor do Chrome abre na última pasta usada. A correção não é
+   avisar melhor, é tirar a escolha de arquivo da jogada: ele aponta a pasta raiz
+   uma vez e o sistema varre tudo sozinho, entrando nas subpastas de mês e de ano.
+
+   Limites reais, sem enfeite:
+   - só Chrome/Edge no desktop (File System Access API). No celular não existe.
+   - o app precisa estar ABERTO. Não há processo rodando no Windows.
+   - é de mão única: adiciona e atualiza, nunca apaga. Apagar continua manual.
+   O handle da pasta não cabe no localStorage (não sobrevive a JSON), então vai
+   pro IndexedDB, que é o único lugar que guarda handle de arquivo. */
+const TEM_PASTA_API = (typeof window!=='undefined') && ('showDirectoryPicker' in window);
+let _pastaHandle=null, _varrendo=false, _pastaMsg='', _pastaPerm='';
+
+/* --- IndexedDB minúsculo, só pra guardar o handle da pasta --- */
+function _idb(){
+  return new Promise((ok,err)=>{
+    const r=indexedDB.open('borinelli-pasta',1);
+    r.onupgradeneeded=()=>{ if(!r.result.objectStoreNames.contains('h')) r.result.createObjectStore('h'); };
+    r.onsuccess=()=>ok(r.result); r.onerror=()=>err(r.error);
+  });
+}
+async function _idbSet(k,v){ try{ const db=await _idb(); return new Promise((ok,err)=>{ const t=db.transaction('h','readwrite'); t.objectStore('h').put(v,k); t.oncomplete=()=>ok(true); t.onerror=()=>err(t.error); }); }catch(e){ return false; } }
+async function _idbGet(k){ try{ const db=await _idb(); return new Promise((ok)=>{ const t=db.transaction('h','readonly'); const q=t.objectStore('h').get(k); q.onsuccess=()=>ok(q.result||null); q.onerror=()=>ok(null); }); }catch(e){ return null; } }
+async function _idbDel(k){ try{ const db=await _idb(); return new Promise((ok)=>{ const t=db.transaction('h','readwrite'); t.objectStore('h').delete(k); t.oncomplete=()=>ok(true); t.onerror=()=>ok(false); }); }catch(e){ return false; } }
+
+/* --- meses escritos de todo jeito na pasta dele: "01 Janeiro", "05- Maio",
+       "08-agosto", "07- Julho". Lê o que der e ignora o resto. --- */
+const _MESES={janeiro:1,fevereiro:2,marco:3,abril:4,maio:5,junho:6,julho:7,agosto:8,setembro:9,outubro:10,novembro:11,dezembro:12};
+function mesDaPasta(nome){
+  const n=String(nome||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  for(const k in _MESES){ if(n.includes(k)) return _MESES[k]; }
+  const m=n.match(/^\s*(\d{1,2})\s*[-_ ]/);   // "01 Janeiro" já pegou acima; sobra "08-"
+  if(m){ const v=Number(m[1]); if(v>=1&&v<=12) return v; }
+  return null;
+}
+function anoDaPasta(nome){
+  const m=String(nome||'').match(/(20\d{2})/);
+  return m? Number(m[1]) : null;
+}
+/* pessoa: primeiro pelo apelido que você já mapeou, depois pelo cadastro.
+   "Nena" e afins entram aqui uma vez e ficam. */
+function pessoaDoArquivo(nomeArq){
+  const base=String(nomeArq||'').replace(/\.[^.]+$/,'').trim();
+  const chave=normOp(base);
+  S.apelidos=S.apelidos||{};
+  if(S.apelidos[chave]){ const p=S.pessoas.find(x=>x.id===S.apelidos[chave]); if(p) return p; }
+  const direto=S.pessoas.find(p=>normOp(p.nome)===chave);
+  if(direto) return direto;
+  // "Ivonete 08-2026.xlsx" ou "Grasi-2026-08.xlsx": aceita a primeira palavra SÓ quando
+  // o resto do nome é data/mês. Sem essa trava, "Grasi Peças horas.xlsx" seria lido como
+  // produção da Grasi e entraria somando por cima do arquivo de verdade.
+  const partes=base.split(/[\s\-_]+/).filter(Boolean);
+  if(partes.length>1){
+    const prim=normOp(partes[0]);
+    const restoEhData=partes.slice(1).every(x=>{
+      const n=normOp(x);
+      return /^\d{1,4}$/.test(n) || _MESES[String(x).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()]!==undefined;
+    });
+    if(restoEhData) return S.pessoas.find(p=>normOp(p.nome)===prim) || null;
+  }
+  return null;
+}
+
+/* --- percorre a pasta e as subpastas, devolvendo os .xlsx com o caminho --- */
+async function _listarArquivos(dir, prefixo, saida, nivel){
+  if(nivel>4) return;                      // 4 níveis já cobre ano/mês/arquivo com folga
+  for await (const [nome, h] of dir.entries()){
+    if(h.kind==='directory'){ await _listarArquivos(h, prefixo+nome+'/', saida, nivel+1); }
+    else if(/\.(xlsx|xlsm|xls)$/i.test(nome) && !nome.startsWith('~$')){
+      saida.push({nome, caminho:prefixo+nome, handle:h, pastas:prefixo.split('/').filter(Boolean)});
+    }
+  }
+}
+async function escolherPasta(){
+  if(!TEM_PASTA_API) return alert('Esse recurso só funciona no Chrome ou Edge do computador.\n\nNo celular continue usando o botão de importar planilhas.');
+  try{
+    const h=await window.showDirectoryPicker({id:'borinelli-planilhas', mode:'read'});
+    _pastaHandle=h; await _idbSet('pasta', h);
+    S.pastaNome=h.name; S.pastaCache=S.pastaCache||{};
+    salvarTudo(); renderPasta();
+    varrerPasta(true);
+  }catch(e){ if(e && e.name!=='AbortError') alert('Não consegui abrir a pasta: '+e.message); }
+}
+async function desligarPasta(){
+  if(!confirm('Desligar a leitura automática?\n\nOs lançamentos já importados continuam. Você volta a importar pelo botão.')) return;
+  _pastaHandle=null; await _idbDel('pasta');
+  delete S.pastaNome; salvarTudo(); renderPasta();
+}
+async function _permPasta(pedir){
+  if(!_pastaHandle) return 'sem';
+  try{
+    const o={mode:'read'};
+    let p=await _pastaHandle.queryPermission(o);
+    if(p==='granted') return 'ok';
+    if(pedir){ p=await _pastaHandle.requestPermission(o); if(p==='granted') return 'ok'; }
+    return 'pedir';
+  }catch(e){ return 'pedir'; }
+}
+async function religarPasta(){
+  const st=await _permPasta(true);
+  renderPasta();
+  if(st==='ok') varrerPasta(true);
+}
+
+/* ---- a varredura ----
+   Só reprocessa arquivo cuja data de modificação ou tamanho mudou. Sem isso,
+   reler 450 planilhas de dez em dez minutos gravaria o estado inteiro na nuvem
+   à toa, e esse estado já é grande. */
+async function varrerPasta(manual){
+  if(_varrendo) return;
+  if(!_pastaHandle){ if(manual) alert('Escolha a pasta primeiro.'); return; }
+  const perm=await _permPasta(!!manual);
+  if(perm!=='ok'){ _pastaPerm='pedir'; renderPasta(); if(manual) alert('O navegador precisa da sua autorização pra ler a pasta de novo. Clique em "Reconectar a pasta".'); return; }
+  _pastaPerm='ok'; _varrendo=true; _pastaMsg='Conferindo a pasta...'; renderPasta();
+  const novos=[], avisos=[], naoReconhecidos=[], ilegiveis=[];
+  let lidos=0, pulados=0;
+  try{
+    const arquivos=[]; await _listarArquivos(_pastaHandle, '', arquivos, 0);
+    S.pastaCache=S.pastaCache||{};
+    for(const a of arquivos){
+      let f; try{ f=await a.handle.getFile(); }catch(e){ continue; }
+      const assinatura=f.lastModified+'|'+f.size;
+      if(S.pastaCache[a.caminho]===assinatura){ pulados++; continue; }   // não mudou
+      const pes=pessoaDoArquivo(a.nome);
+      if(!pes){ naoReconhecidos.push({caminho:a.caminho, nome:a.nome.replace(/\.[^.]+$/,'')}); continue; }
+      let r;
+      try{
+        const wb=XLSX.read(await f.arrayBuffer(), {type:'array', cellDates:true});
+        r=lerPlanilhaProducao(wb, a.nome);
+      }catch(e){ ilegiveis.push(a.caminho+' → '+e.message); S.pastaCache[a.caminho]=assinatura; continue; }
+      if(!r.lanc.length){ S.pastaCache[a.caminho]=assinatura; continue; }
+      /* CONFERÊNCIA DA PASTA CONTRA AS DATAS DE DENTRO:
+         é exatamente o erro de hoje virando alarme. Arquivo em "08-agosto" com
+         datas de julho não entra calado. */
+      const mesPasta=a.pastas.map(mesDaPasta).filter(x=>x).pop();
+      const anoPasta=a.pastas.map(anoDaPasta).filter(x=>x).pop();
+      if(mesPasta){
+        const fora=r.lanc.filter(l=> (l.data.getMonth()+1)!==mesPasta || (anoPasta && l.data.getFullYear()!==anoPasta));
+        if(fora.length){
+          const d0=fora[0].data;
+          avisos.push(a.caminho+': a pasta diz '+String(mesPasta).padStart(2,'0')+(anoPasta?'/'+anoPasta:'')+
+            ' mas '+fora.length+' de '+r.lanc.length+' lançamentos são de '+
+            String(d0.getMonth()+1).padStart(2,'0')+'/'+d0.getFullYear()+'. Confira se o arquivo está na pasta certa.');
+        }
+      }
+      r.lanc.forEach(l=>{ l.pessoaId=pes.id; l.pessoa=pes.nome; l.origemArq=a.caminho; novos.push(l); });
+      (r.faixas||[]).forEach(x=>{});
+      S.pastaCache[a.caminho]=assinatura; lidos++;
+    }
+  }catch(e){ _varrendo=false; _pastaMsg='Falhou: '+e.message; renderPasta(); return; }
+  _varrendo=false;
+
+  S.pastaAvisos=avisos; S.pastaIlegiveis=ilegiveis;
+  S.pastaDesconhecidos=naoReconhecidos;
+  S.pastaUltima=Date.now();
+
+  if(!novos.length){
+    _pastaMsg = lidos? 'Li '+lidos+' arquivo(s), sem lançamento novo.' : 'Nada mudou desde a última conferência ('+pulados+' arquivos conferidos).';
+    salvarTudo(); renderPasta(); renderTudo(); return;
+  }
+  /* Operação com sigla que o sistema não conhece NÃO pode ser adivinhada.
+     O que já tem mapeamento entra sozinho; o resto para e espera você. */
+  S.mapaOps=S.mapaOps||{};
+  const siglas=[...new Set(novos.map(l=>normOp(l.opTxt)))];
+  const novasSiglas=siglas.filter(x=>!S.mapaOps[x]);
+  if(novasSiglas.length){
+    _pastaMsg=novos.length+' lançamento(s) esperando: tem operação que eu não conheço ainda.';
+    _impPendente={todos:novos, siglas, faixas:[]};
+    renderPasta();
+    abrirMapaOps(siglas, novos);
+    return;
+  }
+  gravarImportacao(novos, [], {silencioso:true});
+  _pastaMsg='Pronto: '+lidos+' arquivo(s) atualizado(s), '+novos.length+' lançamento(s).';
+  renderPasta();
+}
+
+function renderPasta(){
+  const box=document.getElementById('pastaEstado'); if(!box) return;
+  const bt=document.getElementById('btVarrer'), bd=document.getElementById('btDesligarPasta');
+  if(bt) bt.style.display=_pastaHandle?'':'none';
+  if(bd) bd.style.display=_pastaHandle?'':'none';
+  if(!TEM_PASTA_API){
+    box.innerHTML='<div class="mini-info" style="color:#b06b3a;">Este navegador não tem esse recurso. Use o Chrome ou o Edge do computador. Aqui continua funcionando o botão de importar.</div>';
+    return;
+  }
+  if(!_pastaHandle){
+    box.innerHTML='<div class="mini-info">Nenhuma pasta ligada ainda.</div>';
+    return;
+  }
+  const quando=S.pastaUltima? new Date(S.pastaUltima).toLocaleString('pt-BR') : 'ainda não';
+  let h='<div><b>📂 '+(S.pastaNome||'pasta')+'</b> <span class="mini-info">· última conferência: '+quando+'</span></div>';
+  if(_pastaPerm==='pedir') h+='<div class="notaFicha nfPasso" style="margin-top:8px;"><b>O navegador pediu a autorização de novo</b><br>Isso é normal depois de fechar o app. <button class="acao mini" onclick="religarPasta()">Reconectar a pasta</button></div>';
+  if(_pastaMsg) h+='<div class="mini-info" style="margin-top:6px;">'+(_varrendo?'⏳ ':'')+_pastaMsg+'</div>';
+  box.innerHTML=h;
+
+  const pend=document.getElementById('pastaPendencias');
+  if(pend){
+    let p='';
+    const desc=S.pastaDesconhecidos||[];
+    if(desc.length){
+      const opts=S.pessoas.map(x=>'<option value="'+x.id+'">'+x.nome+'</option>').join('');
+      p+='<div class="notaFicha nfPasso" style="margin-top:10px;"><b>Não sei de quem são estes arquivos</b>'+
+         '<div class="mini-info">Aponte a pessoa uma vez e o sistema lembra pra sempre.</div>'+
+         '<table style="margin-top:8px;">'+desc.map(d=>
+           '<tr><td>'+d.nome+' <span class="mini-info">('+d.caminho+')</span></td>'+
+           '<td><select id="apel-'+d.nome.replace(/[^A-Za-z0-9]/g,'_')+'"><option value="">— escolher —</option>'+opts+'</select></td></tr>').join('')+
+         '</table><button class="acao mini" style="margin-top:8px;" onclick="salvarApelidos()">Salvar e conferir de novo</button></div>';
+    }
+    const av=S.pastaAvisos||[];
+    if(av.length) p+='<div class="notaFicha nfPasso" style="margin-top:10px;border-left-color:#b23b3b;"><b>⚠ Arquivo na pasta errada?</b><br>'+av.join('<br>')+'</div>';
+    const il=S.pastaIlegiveis||[];
+    if(il.length) p+='<div class="mini-info" style="margin-top:8px;">Não consegui ler: '+il.join(' · ')+'</div>';
+    pend.innerHTML=p;
+  }
+}
+function salvarApelidos(){
+  S.apelidos=S.apelidos||{};
+  let n=0;
+  (S.pastaDesconhecidos||[]).forEach(d=>{
+    const el=document.getElementById('apel-'+d.nome.replace(/[^A-Za-z0-9]/g,'_'));
+    if(el && el.value){ S.apelidos[normOp(d.nome)]=el.value; n++; }
+  });
+  if(!n) return alert('Escolha pelo menos uma pessoa.');
+  // esses arquivos precisam ser lidos de novo: tira do cache pra não serem pulados
+  (S.pastaDesconhecidos||[]).forEach(d=>{ if(S.pastaCache) delete S.pastaCache[d.caminho]; });
+  S.pastaDesconhecidos=[];
+  salvarTudo(); renderPasta(); varrerPasta(true);
+}
+/* religa sozinho ao abrir o app, e confere de 10 em 10 minutos */
+async function iniciarPasta(){
+  if(!TEM_PASTA_API) return;
+  const h=await _idbGet('pasta');
+  if(!h) { renderPasta(); return; }
+  _pastaHandle=h;
+  _pastaPerm=await _permPasta(false);
+  renderPasta();
+  if(_pastaPerm==='ok') varrerPasta(false);
+  setInterval(()=>{ if(_pastaPerm==='ok') varrerPasta(false); }, 10*60000);
+}
+
+function renderTudo(){ renderPasta(); preencherPeriodoRelat(); renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); renderImportacoes(); renderCronoHist(); if(perfilAtivo==='costureira') renderMinha(); if(document.querySelector('#sub-relat-diadia.on')) renderDiaDia(); }
 /* atalhos: Enter confirma, Esc cancela nos modais */
 document.addEventListener('keydown', e=>{
   const conf=document.getElementById('confModal'), lac=document.getElementById('lacModal');
@@ -7787,14 +8093,14 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, { avancoFaixa, horasMesRef, pertoDeSubir, mesMaisRecenteComProducao, sincronizarMetas, confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, pctProducaoPorRitmo, pctDoRitmo, setOverride, limparOverride, ajustarPremio});
+Object.assign(window, { mediaDiaFamiliaMes, mesAtualKey, rotuloMesCurto, escolherPasta, varrerPasta, desligarPasta, religarPasta, salvarApelidos, renderPasta, pessoaDoArquivo, mesDaPasta, anoDaPasta, avancoFaixa, horasMesRef, pertoDeSubir, mesMaisRecenteComProducao, sincronizarMetas, confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, pctProducaoPorRitmo, pctDoRitmo, setOverride, limparOverride, ajustarPremio});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
 sbVersao.textContent='v'+VERSAO;
 const tv2=document.getElementById('txtVersao'); if(tv2) tv2.textContent='Versão instalada: '+VERSAO;
 try{ opEntrada.value=new Date().toISOString().slice(0,10); }catch(e){}
-carregar().then(()=>{ restaurarPerfil(); if(typeof firebase!=='undefined') iniciarFirebase(); });
+carregar().then(()=>{ restaurarPerfil(); if(typeof firebase!=='undefined') iniciarFirebase(); iniciarPasta(); });
 </script>
 </body>
 </html>
