@@ -1,18 +1,24 @@
-const CACHE = 'borinelli-prod-v99';
+const CACHE = 'borinelli-prod-v100';
 const ARQUIVOS = [
   './index.html',
   './manifest.json',
   './icone-192.png',
   './icone-512.png',
   './logo.png',
-  'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js',
   'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
   'https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js',
   'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js'
+  'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
 ];
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ARQUIVOS).catch(()=>{})).then(() => self.skipWaiting()));
+  // um por um, e não addAll: no addAll, se UMA url falha o lote inteiro rejeita e o
+  // cache fica vazio em silêncio. Você só descobria no dia em que a internet caísse.
+  e.waitUntil(
+    caches.open(CACHE)
+      .then(c => Promise.all(ARQUIVOS.map(u => c.add(u).catch(() => {}))))
+      .then(() => self.skipWaiting())
+  );
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
