@@ -2975,6 +2975,12 @@ nav button.oculto{display:none;}
     <div id="fundePreview" class="mini-info" style="margin:8px 0;"></div>
     <button class="acao" onclick="fundirOperacoes()">🔗 Unificar</button>
   </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;">🏷 Para onde vai cada nome de planilha</h2>
+    <div class="mini-info" style="margin-bottom:10px;">Um nome escrito na planilha caiu na operação errada? Corrija aqui. Diferente de unificar: isso mexe <b>só</b> nesse nome, e as outras planilhas que usam a mesma operação não são afetadas.</div>
+    <div id="mapaSiglas"></div>
+  </div>
   </div>
   <div class="sub" id="sub-aj-impressao">
   <div class="card">
@@ -3078,6 +3084,7 @@ const OPS_BASE = [
  // --- conforme as tabelas oficiais de produção (70/80/90/100%) ---
  {id:'OMBRO1', nome:'1 Ombro', metas:[190,210,230,250]},
  {id:'OMBROS2ETIQ', nome:'Os 2 ombros com etiqueta', metas:[90,100,120,130]},
+ {id:'OMBROS2', nome:'Os 2 ombros', metas:[90,100,120,130]},   // mesma meta da versão com etiqueta
  {id:'OMBROARREMATE', nome:'Ombro com arremate', metas:[170,190,210,230]},
  {id:'GOLAANEL', nome:'Gola em anel', metas:[85,95,100,110]},
  {id:'GOLAAPARELHO', nome:'Gola em aparelho overloque', metas:[170,190,210,220]},
@@ -3292,6 +3299,40 @@ function migrarLaterais(){
   }
   S.lateralRev=1;
 }
+/* "FECHAR 2 OMBROS" tinha caído em "2 ombros e gola", que é outra operação (gola é
+   trabalho a mais) e por isso ficava sem meta. Conserta o mapa e os lançamentos que
+   vieram por esse caminho. Não toca em nada que tenha GOLA ou ETIQUETA no nome. */
+function migrar2Ombros(){
+  if(S.ombros2Rev) return;
+  S.ombros2Rev=1;
+  if(!S.opsBase.some(o=>o.id==='OMBROS2')){
+    const ref=S.opsBase.find(o=>o.id==='OMBROS2ETIQ');
+    const i=S.opsBase.findIndex(o=>o.id==='OMBROARREMATE');
+    const nova={id:'OMBROS2', nome:'Os 2 ombros', metas:(ref&&ref.metas)?ref.metas.slice():[90,100,120,130]};
+    if(i>=0) S.opsBase.splice(i,0,nova); else S.opsBase.push(nova);
+  }
+  const errados=new Set();
+  Object.keys(S.mapaOps||{}).forEach(sig=>{
+    if(/2\s*OMBROS?/.test(' '+sig+' ') && !/ET[IQ]/.test(sig) && !/GOLA/.test(sig)){
+      if(S.mapaOps[sig]!=='OMBROS2'){ errados.add(S.mapaOps[sig]); S.mapaOps[sig]='OMBROS2'; }
+    }
+  });
+  // move os lançamentos que estavam na operação errada, mas SÓ os que vieram de planilha
+  // com esse nome. Sem o texto original guardado, não dá pra separar com segurança:
+  // então só mexe quando a operação de destino não tem mais nenhum outro nome apontando.
+  errados.forEach(idErrado=>{
+    const aindaUsada=Object.values(S.mapaOps||{}).some(v=>v===idErrado);
+    if(aindaUsada) return;
+    (S.ciclos||[]).forEach(c=>{
+      if(!c.importado) return;
+      if(opBaseDe(c)!==idErrado) return;
+      if(c.origTxt && (!/2\s*OMBROS?/.test(' '+normOp(c.origTxt)+' ') || /ET[IQ]|GOLA/.test(normOp(c.origTxt)))) return;
+      const resto=(c.opKey||c.op||'').split('|').slice(1);
+      c.opKey=['OMBROS2'].concat(resto).join('|'); c.op=c.opKey; c.rotulo='Os 2 ombros'; c.ts=Date.now();
+    });
+    S.opsBase=(S.opsBase||[]).filter(o=>o.id!==idErrado || (S.ciclos||[]).some(c=>opBaseDe(c)===idErrado));
+  });
+}
 let S = {cfg:{...CFG_PADRAO}, pessoas:PESSOAS_PADRAO, opsBase:OPS_BASE, metasVar:{}, baselines:BASELINES_PADRAO, marcas:[], ordens:[], ciclos:[]};
 let sel=null, pendingBase=null, pendingPacote=null, pendingTs=0, entradaMode=false;
 let travaBip=false, propostaAtual=null, lacPendente=null;
@@ -3335,7 +3376,7 @@ function ligarBanco(){
       aplicandoRemoto=true;
       const euTinhaMais = mesclarEstado(d);   // junta em vez de sobrescrever
       migrarOpsBase();
-      migrarLaterais();
+      migrarLaterais(); migrar2Ombros();
       aplicandoRemoto=false;
       gravarLocal(JSON.stringify(S));
       renderTudo(); preencherCfg();
@@ -3414,7 +3455,7 @@ async function carregar(){
   if(v){ try{ const d=JSON.parse(v); S=Object.assign(S,d); }catch(e){} }
   // migrações
   migrarOpsBase();
-  migrarLaterais();
+  migrarLaterais(); migrar2Ombros();
   S.marcas=S.marcas||[]; S.metasVar=S.metasVar||{};
   (S.ordens||[]).forEach(o=>{ o.etapas=o.etapas||[]; o.externos=o.externos||[]; o.chegadas=o.chegadas||[]; o.resolvidos=o.resolvidos||[]; });
   if(S.cfg.empacadoMin===undefined) S.cfg.empacadoMin=45;
@@ -4942,6 +4983,8 @@ function lerBlocoProducao(g, rData, rFim, pessoa){
         if(typeof v==='number' && isFinite(n) && n>0) pecas+=n;
       }
     }
+    // coluna com 0 peças (dia futuro com horas pré-preenchidas, ou operação que não
+    // rodou) NÃO vira lançamento: entraria como um dia de 0 pçs/h e afundaria a média.
     if(pecas>0 && horas>0) lanc.push({pessoa, data, opTxt:String(opTxt).trim(), pecas, horas});
   }
   // lê a tabelinha de faixas (70/80/90/100) que fica embaixo, se existir.
@@ -5117,9 +5160,9 @@ function opDaPlanilha(sigla){
   const s=' '+sigla+' ';
   if(/LATERAL/.test(s)){
     let n=0;
-    const m=s.match(/(\d)\s*ETIQ/); if(m) n=Number(m[1]);
-    else if(/SEM\s+ETIQ/.test(s)) n=0;
-    else if(/C\/?\s*ETIQ|COM\s+ETIQ/.test(s)) n=1;
+    const m=s.match(/(\d)\s*ET[IQ]/); if(m) n=Number(m[1]);          // aceita ETIQ e ETQ
+    else if(/SEM\s+ET[IQ]/.test(s)) n=0;
+    else if(/C\/?\s*ET[IQ]|COM\s+ET[IQ]/.test(s)) n=1;
     // 0 ou 1 etiqueta (com ou sem arremate) → LATERAL
     if(n<=1) return 'LATERAL';
     return 'LATERAL'+n+'ETIQ';   // 2 ou 3 etiquetas
@@ -5132,7 +5175,10 @@ function opDaPlanilha(sigla){
   // apelidos comuns (ordem das palavras pode variar)
   if(/ARREMATE/.test(s) && /OMBRO/.test(s)) return 'OMBROARREMATE';
   if(/^ARREMATE$/.test(sigla)) return 'OMBROARREMATE';
-  if(/2\s*OMBROS?/.test(s) && /ETIQ/.test(s)) return 'OMBROS2ETIQ';
+  if(/2\s*OMBROS?/.test(s) && /ET[IQ]/.test(s)) return 'OMBROS2ETIQ';
+  // "FECHAR 2 OMBROS" / "2 OMBROS": sem etiqueta e sem gola é operação própria,
+  // com a mesma meta da versão com etiqueta.
+  if(/2\s*OMBROS?/.test(s) && !/GOLA/.test(s)) return 'OMBROS2';
   if(/^1\s*OMBRO$/.test(sigla)) return 'OMBRO1';
   if(/^PREGAR MANGA$|^MANGA$/.test(sigla)) return 'MANGA';
   if(/^BARRA$|BAINHA.*BARRA/.test(sigla)) return 'BAINHABARRA';
@@ -5279,7 +5325,7 @@ function gravarImportacao(todos, criadas, opc){
       const existenteIdx=S.ciclos.findIndex(c=>c.id===a.chave);
       const novo={id:a.chave, pessoa:a.pessoaId, op:a.opId, opKey:a.opId, rotulo, etapaIdx:-1,
         ordem:'(planilha)', tam:'-', pacote:'-', qtd:a.pecas, ini:ini.getTime(), fim:ini.getTime()+a.horas*3600000,
-        pausas:[], rateEfetivo:a.pecas/a.horas, importado:true, impLote:loteId, ts:Date.now()};
+        pausas:[], rateEfetivo:a.pecas/a.horas, importado:true, impLote:loteId, origTxt:a.opTxt, ts:Date.now()};
       if(existenteIdx>=0){
         // já existia (reimportação): SUBSTITUI pelo valor novo, corrige dado antigo errado
         S.ciclos[existenteIdx]=novo; atualizados++;
@@ -7763,7 +7809,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.4.0';
+const VERSAO = '4.5.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -8256,6 +8302,44 @@ function fundirOperacoes(){
   salvarTudo(); renderTudo();
   alert('Pronto. '+alvo.length+' lançamento(s) agora são "'+B.nome+'".');
 }
+/* ---- para onde vai cada nome de planilha ----
+   Unificar junta operações inteiras. Isso aqui é cirúrgico: reaponta UMA grafia.
+   Necessário porque "FECHAR 2 OMBROS" tinha caído em "2 ombros e gola", e unificar
+   as duas arrastaria junto quem realmente faz ombro com gola. */
+function renderMapaSiglas(){
+  const box=document.getElementById('mapaSiglas'); if(!box) return;
+  const sigs=Object.keys(S.mapaOps||{}).sort();
+  if(!sigs.length){ box.innerHTML='<div class="mini-info">Nenhum nome de planilha mapeado ainda.</div>'; return; }
+  const usoDe=sig=>(S.ciclos||[]).filter(c=>c.origTxt && normOp(c.origTxt)===sig).length;
+  box.innerHTML='<table><tr><th>Nome na planilha</th><th>Vai para</th><th></th></tr>'+
+    sigs.map(sig=>{
+      const atual=S.mapaOps[sig];
+      const id='sig-'+sig.replace(/[^A-Z0-9]/g,'_');
+      const n=usoDe(sig);
+      return '<tr><td><b>'+sig+'</b>'+(n?' <span class="mini-info">('+n+' lanç.)</span>':'')+'</td>'+
+        '<td><select id="'+id+'">'+(S.opsBase||[]).map(o=>'<option value="'+o.id+'"'+(o.id===atual?' selected':'')+'>'+o.nome+'</option>').join('')+'</select></td>'+
+        '<td><button class="acao mini" onclick="remapearSigla(\''+sig.replace(/'/g,"")+'\',\''+id+'\')">Aplicar</button></td></tr>';
+    }).join('')+'</table>'+
+    '<div class="mini-info" style="margin-top:8px;">Ao aplicar, os lançamentos que vieram desse nome mudam junto. Lançamentos antigos, importados antes desta versão, não guardam o nome de origem: nesses, reimporte a planilha depois (a pasta automática faz sozinho).</div>';
+}
+function remapearSigla(sig, selId){
+  if(!autorizado()) return;
+  const el=document.getElementById(selId); if(!el) return;
+  const destino=el.value, atual=(S.mapaOps||{})[sig];
+  if(!destino || destino===atual) return alert('Escolha uma operação diferente da atual.');
+  const nomeDestino=((S.opsBase||[]).find(o=>o.id===destino)||{}).nome||destino;
+  const alvo=(S.ciclos||[]).filter(c=>c.origTxt && normOp(c.origTxt)===sig);
+  if(!confirm('"'+sig+'" passa a cair em "'+nomeDestino+'".\n\n'+
+    (alvo.length? alvo.length+' lançamento(s) já importados mudam junto.' : 'Nenhum lançamento antigo guarda o nome de origem — só vale para as próximas importações.')+
+    '\n\nAs outras planilhas não são afetadas.')) return;
+  S.mapaOps[sig]=destino;
+  alvo.forEach(c=>{
+    const resto=(c.opKey||c.op||'').split('|').slice(1);
+    c.opKey=[destino].concat(resto).join('|'); c.op=c.opKey; c.rotulo=nomeDestino; c.ts=Date.now();
+  });
+  salvarTudo(); renderTudo();
+  alert('Pronto.'+(alvo.length? ' '+alvo.length+' lançamento(s) movidos.' : ''));
+}
 function voltarALer(chave){
   if(!S.pastaIgnorar || !S.pastaIgnorar[chave]) return;
   delete S.pastaIgnorar[chave];
@@ -8274,7 +8358,7 @@ async function iniciarPasta(){
   setInterval(()=>{ if(_pastaPerm==='ok') varrerPasta(false); }, 10*60000);
 }
 
-function renderTudo(){ renderPasta(); preencherFusao(); preencherPeriodoRelat(); renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); renderImportacoes(); renderCronoHist(); if(perfilAtivo==='costureira') renderMinha(); if(document.querySelector('#sub-relat-diadia.on')) renderDiaDia(); }
+function renderTudo(){ renderPasta(); preencherFusao(); renderMapaSiglas(); preencherPeriodoRelat(); renderSaida(); renderPainelOps(); renderPainel(); renderOps(); renderMarcas(); renderHist(); renderAlertas(); renderAjustes(); renderCalibra(); renderOcorrencias(); renderSimu(); renderPessoaPicker(); if(sel) renderOpPicker(sel); renderDesfazer(); renderImportacoes(); renderCronoHist(); if(perfilAtivo==='costureira') renderMinha(); if(document.querySelector('#sub-relat-diadia.on')) renderDiaDia(); }
 /* atalhos: Enter confirma, Esc cancela nos modais */
 document.addEventListener('keydown', e=>{
   const conf=document.getElementById('confModal'), lac=document.getElementById('lacModal');
@@ -8286,7 +8370,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, { fundirOperacoes, previewFusao, preencherFusao, opsComUso, voltarALer, previewRemocao, removerImportados, preencherRemocao, ciclosImportadosDe, arquivoIgnorado, chaveArquivo, mediaDiaFamiliaMes, mesAtualKey, rotuloMesCurto, escolherPasta, varrerPasta, desligarPasta, religarPasta, salvarApelidos, renderPasta, pessoaDoArquivo, mesDaPasta, anoDaPasta, avancoFaixa, horasMesRef, pertoDeSubir, mesMaisRecenteComProducao, sincronizarMetas, confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, pctProducaoPorRitmo, pctDoRitmo, setOverride, limparOverride, ajustarPremio});
+Object.assign(window, { remapearSigla, renderMapaSiglas, migrar2Ombros, fundirOperacoes, previewFusao, preencherFusao, opsComUso, voltarALer, previewRemocao, removerImportados, preencherRemocao, ciclosImportadosDe, arquivoIgnorado, chaveArquivo, mediaDiaFamiliaMes, mesAtualKey, rotuloMesCurto, escolherPasta, varrerPasta, desligarPasta, religarPasta, salvarApelidos, renderPasta, pessoaDoArquivo, mesDaPasta, anoDaPasta, avancoFaixa, horasMesRef, pertoDeSubir, mesMaisRecenteComProducao, sincronizarMetas, confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, pctProducaoPorRitmo, pctDoRitmo, setOverride, limparOverride, ajustarPremio});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
