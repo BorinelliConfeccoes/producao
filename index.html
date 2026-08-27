@@ -3687,12 +3687,31 @@ function presencaPeriodo(pid, de, ate){
   });
   return tot;
 }
+/* ================= FAIXA FECHADA =================
+   O percentual geral saía interpolado (89%, 83%), e faixa quebrada não existe: a
+   tabela de prêmio só tem 70, 80, 90 e 100. Agora o resultado fecha na faixa mais
+   próxima — 81 a 84 vira 80, 85 a 89 vira 90, e assim em todas.
+   Abaixo de 70 NÃO sobe: 65% viraria 70% e pagaria prêmio de quem não bateu a faixa.
+   Isso é uma decisão de dinheiro, não de arredondamento — fica de fora até o Patrick
+   mandar o contrário. */
+function fecharNaFaixa(pct){
+  if(pct==null || !isFinite(pct)) return pct;
+  if(pct>=100) return 100;
+  /* A ENTRADA NOS 70% É DIFERENTE DAS OUTRAS FAIXAS.
+     Nas faixas de cima vale o arredondamento normal (75→80, 85→90, 95→100), porque
+     lá já se ganhou prêmio e a discussão é só de quanto. Nos 70 a discussão é ganhar
+     ou não ganhar: o mínimo é 70% de verdade. A única exceção é 69%, que sobe por
+     causa da margem de erro de contagem. 68% pra baixo não ganha, e não arredonda. */
+  if(pct>=69 && pct<70) return 70;
+  if(pct<69) return Math.floor(pct);          // sem faixa: nunca exibe um 69 que não ganha
+  return Math.min(100, Math.round(pct/10)*10);
+}
 function pctGeralPessoa(a){
   if(!a || !a.ops) return null;
   const comMeta=a.ops.filter(o=>o.temMeta && o.pct!==null);
   if(!comMeta.length) return null;
   const soma=comMeta.reduce((s,o)=>s+o.pct*o.horas,0), peso=comMeta.reduce((s,o)=>s+o.horas,0);
-  return peso? Math.round(Math.min(100,soma/peso)) : null;
+  return peso? fecharNaFaixa(Math.min(100,soma/peso)) : null;
 }
 function analisePessoa(pid, dias, de, ate){
   const meus=ciclosDe(pid, dias, de, ate);
@@ -3756,13 +3775,17 @@ function analisePessoa(pid, dias, de, ate){
   // NUNCA comparar com outras pessoas, nem exibir volume bruto como elogio.
   // A folha é entregue à pessoa: fala só do desempenho dela contra a meta dela.
   if(recorde) destaqueLinhas.push('Seu melhor dia foi '+recorde.d+(recorde.op?', fazendo '+recorde.op:'')+': '+Math.round(recorde.media)+' pçs/h.');
-  // pior dia (só sobre ela mesma, sem comparar com ninguém)
-  let pior=null;
-  if(nDias>=3 && diasLista.length>1){
-    const comRitmo=diasLista.filter(d=>d.media>0);
-    if(comRitmo.length>1) pior=comRitmo.reduce((x,y)=>y.media<x.media?y:x);
+  /* Antes aqui saía "seu dia mais puxado", que era o pior dia dela com data e tudo.
+     Numa folha entregue na mão da pessoa isso é dedo na ferida, não reconhecimento.
+     Trocado por constância: mostra que o melhor dia não foi sorte. Só aparece quando
+     é verdade — se ela repetiu o ritmo em outros dias. */
+  if(recorde && nDias>=3){
+    const perto=diasLista.filter(d=>d.media>0 && d.media>=recorde.media*0.9).length;
+    if(perto>=2){
+      destaqueLinhas.push('E não foi um dia só: em '+perto+' dos '+nDias+' dias você ficou em '+
+        Math.round(recorde.media*0.9)+' pçs/h ou mais.');
+    }
   }
-  if(pior && recorde && pior.d!==recorde.d) destaqueLinhas.push('Seu dia mais puxado foi '+pior.d+(pior.op?', fazendo '+pior.op:'')+': '+Math.round(pior.media)+' pçs/h.');
   if(destaque && destaque.temMeta) destaqueLinhas.push('Sua melhor faixa é '+destaque.rotulo+', '+Math.round(destaque.media)+' pçs/h na faixa '+destaque.faixa+'.');
 
   /* ---- o toque: o empurrãozinho sai de dentro do ponto forte, não de uma cobrança
@@ -3809,11 +3832,10 @@ function analisePessoa(pid, dias, de, ate){
     if(ruim.pct < ref-8 && ganho>=10) cands.push({ganho, tag:'ritmo do dia',
       txt:'Comparando cada hora com o padrão da operação que rodou nela: às '+String(boa.h).padStart(2,'0')+'h você fica em '+Math.round(boa.pct)+'% e às '+String(ruim.h).padStart(2,'0')+'h cai para '+Math.round(ruim.pct)+'%. Segurar o ritmo nesses horários vale cerca de '+Math.round(ganho)+' peças por dia.'});
   }
-  if(tro && tro.perdaDia>0 && tro.trocasDia>=1){
-    const ganho=tro.perdaDia;
-    if(ganho>=10) cands.push({ganho, tag:'troca de operação',
-      txt:'Você troca de operação '+tro.trocasDia.toFixed(1).replace('.',',')+' vezes por dia. Na mesma operação, o pacote logo depois da troca rende menos que os pacotes emendados. Juntando as operações, isso custa cerca de '+Math.round(ganho)+' peças por dia. Emendar mais pacotes da mesma operação recupera boa parte disso.'});
-  }
+  /* A sugestão de "você troca de operação X vezes por dia" foi removida de propósito.
+     Quem decide a troca é a programação, não a costureira: cobrar isso dela na folha é
+     cobrar uma coisa que ela não controla. O Patrick já trata isso alimentando a planilha
+     de outro jeito quando vê que a pessoa está trocando demais. Não voltar a exibir. */
   // nenhuma sugestão pode prometer mais do que 25% do que a pessoa já produz por dia.
   // estimativa que estoura isso é ruído de amostra, não oportunidade.
   const teto=(totPcs/nDias)*0.25;
@@ -6427,8 +6449,8 @@ function renderPainelCelula(){
 
   fichas.forEach(({nome, a})=>{
     const g=pctGeral(a);
-    const gTx = g===999? '—' : Math.round(g)+'%';
-    const cor = g===999? '#666' : (g>=100?'#3d4d32': g>=80?'#8a7a2e':'#b06b3a');
+    const gTx = g===999? '—' : fecharNaFaixa(g)+'%';
+    const cor = g===999? '#666' : (fecharNaFaixa(g)>=100?'#3d4d32': fecharNaFaixa(g)>=80?'#8a7a2e':'#b06b3a');
     const pr=a.presenca||{faltas:0,atestados:0,atrasos:0,saidas:0};
     const presTxt=[];
     if(pr.faltas) presTxt.push(pr.faltas+' falta'+(pr.faltas>1?'s':'')+' s/ justificativa');
@@ -6904,8 +6926,10 @@ function pctProducaoPorRitmo(ym, pid){
     detalhe.push({rotulo, ritmo, metas, pct, horas:h, pcs:g.pcs, origem:g.origem});
     somaPct+=pct*h; somaPeso+=h;   // pondera pelas horas
   });
-  if(somaPeso<=0) return {pct:0, semMeta, detalhe, peso:0};
-  return {pct:Math.round(somaPct/somaPeso), semMeta, detalhe, peso:somaPeso};
+  if(somaPeso<=0) return {pct:0, semMeta, detalhe, peso:0, pctCru:0};
+  const cru=somaPct/somaPeso;
+  // pctCru fica guardado pra ordenação e conferência; quem manda no prêmio é o fechado
+  return {pct:fecharNaFaixa(cru), pctCru:Math.round(cru*10)/10, semMeta, detalhe, peso:somaPeso};
 }
 // converte um ritmo (pçs/h) no percentual, interpolando entre as faixas
 function pctDoRitmo(ritmo, metas){
@@ -6955,7 +6979,23 @@ function calcularPremio(ym, pid, metaMensalCamisetas){
   let pctFinal=Math.min(pctProd, teto);
   let premioProd=valorProducao(pctFinal);
   let motivoProd='';
+  /* Quando não ganha, o porquê tem que estar escrito e com número. "Abaixo de 70%" não
+     explica nada; "faltaram 412 peças no mês" a pessoa entende e consegue perseguir. */
+  let faltouPecas=0, faltouOps=[];
+  if(pctFinal<70){
+    (pr.detalhe||[]).forEach(d=>{
+      if(!d.metas || !d.metas[0] || !d.horas) return;
+      const alvo=d.metas[0]*d.horas;             // peças que a meta de 70% pediria
+      if(d.pcs < alvo){ faltouPecas += (alvo-d.pcs); faltouOps.push(d.rotulo); }
+    });
+    faltouPecas=Math.ceil(faltouPecas);
+  }
   if(faltasInjust>0){ premioProd={valor:0,faixa:0}; motivoProd='falta sem justificativa zera a produção'; }
+  else if(pctFinal<70){
+    motivoProd='ficou em '+pctFinal+'%: o mínimo é 70%'+
+      (faltouPecas>0? ' — faltaram '+faltouPecas.toLocaleString('pt-BR')+' peças no mês'+
+        (faltouOps.length? ' ('+faltouOps.slice(0,3).join(', ')+')' : '') : '');
+  }
   else if(teto<100){ motivoProd='limitado a '+teto+'% por '+(pres.atrasos>=2?'atrasos':'')+(pres.saidas?' saídas':''); }
   // valores calculados pela regra
   const assidCalc=assid, prodCalc=premioProd.valor;
@@ -6965,7 +7005,7 @@ function calcularPremio(ym, pid, metaMensalCamisetas){
   if(ov.assid!=null && ov.assid!==''){ assidFinal=Number(ov.assid)||0; ajustado=true; }
   if(ov.prod!=null && ov.prod!==''){ prodFinal=Number(ov.prod)||0; ajustado=true; }
   return {assid:assidFinal, assidCalc, motivoAssid, pctProd, pctFinal, teto,
-          premioProd:prodFinal, prodCalc, faixaProd:premioProd.faixa, motivoProd, opsSemMeta,
+          premioProd:prodFinal, prodCalc, faixaProd:premioProd.faixa, motivoProd, faltouPecas, opsSemMeta,
           detalhePct:pr.detalhe||[], pesoPct:pr.peso||0,
           ajustado, motivoAjuste:ov.motivo||'',
           dias:prod.diasTrab, pcs:prod.pcs, total:assidFinal+prodFinal};
@@ -7100,10 +7140,16 @@ function renderPremios(){
         (r.opsSemMeta && r.opsSemMeta.length? ' <span title="Operações sem faixa cadastrada, ficaram de fora do %: '+r.opsSemMeta.join(', ')+'" style="cursor:help; color:#b23b3b;">⚠</span>':'')+
         '<br><button class="acao mini sec" style="margin-top:4px;" onclick="verConta(\''+pid+'\')">ver conta</button></td>'+
       cell(r.assid, r.assidCalc, r.motivoAssid, '#f5faf0')+
-      cell(r.premioProd, r.prodCalc, r.faixaProd?r.faixaProd+'%':'', '#fdf9f0')+
+      cell(r.premioProd, r.prodCalc, r.faixaProd?r.faixaProd+'%':(r.motivoProd||'não atingiu 70%'), '#fdf9f0')+
       '<td><b>R$ '+r.total.toFixed(0)+'</b></td>'+
       '<td><button class="acao mini sec" onclick="ajustarPremio(\''+ym+'\',\''+pid+'\',\''+nome.replace(/'/g,'')+'\')">ajustar</button>'+
         (r.ajustado?'<br><button class="acao mini" style="margin-top:3px;" onclick="limparOverride(\''+ym+'\',\''+pid+'\')">desfazer</button>':'')+'</td></tr>';
+    if(!r.premioProd && r.pctFinal<70 && !r.ajustado){
+      html+='<tr><td colspan="12" style="padding-top:0;"><div style="background:#fdf2f1; border-left:4px solid #b23b3b; padding:7px 10px; border-radius:0 6px 6px 0; line-height:1.5;">'+
+        '<b>'+nome+' não recebeu o prêmio de produção.</b> '+(r.motivoProd||'')+'.<br>'+
+        '<span class="mini-info">A regra: o mínimo é 70%. De 69% sobe pra 70% pela margem de erro de contagem. De 68% pra baixo não entra e não arredonda.</span>'+
+        '</div></td></tr>';
+    }
     if(r.ajustado && r.motivoAjuste){
       html+='<tr><td colspan="12" class="mini-info" style="padding-top:0; color:#8a5a00;">✏️ '+nome+': '+r.motivoAjuste+'</td></tr>';
     }
@@ -7123,7 +7169,8 @@ function renderPremios(){
 
   html+='<div class="card"><h3 style="margin-top:0;">As regras aplicadas</h3><div class="mini-info" style="line-height:1.7;">'+
     '<b>Assiduidade (R$ '+PREMIO_ASSIDUIDADE+'):</b> integral só sem nenhuma falta. 1 atestado: -50%. 2+ atestados: zera. Falta sem justificativa: zera assiduidade E produção.<br>'+
-    '<b>Produção:</b> 100%=R$500, 90%=R$450, 80%=R$400, 70%=R$250, abaixo de 70% não ganha. Atestado não afeta produção (a meta cai proporcional aos dias). 2 atrasos >10min: teto 80%. 1 saída antecipada: teto 80%, 2ª: teto 70%.</div></div>';
+    '<b>Produção:</b> 100%=R$500, 90%=R$450, 80%=R$400, 70%=R$250, abaixo de 70% não ganha.<br>'+
+    '<b>Como o % fecha na faixa:</b> 95% ou mais = 100%, 85 a 94 = 90%, 75 a 84 = 80%, 70 a 74 = 70%. Nos 70% a régua é mais dura porque ali se decide ganhar ou não ganhar: <b>só 69% sobe</b>, pela margem de erro de contagem. <b>68% pra baixo não ganha e não arredonda.</b><br> Atestado não afeta produção (a meta cai proporcional aos dias). 2 atrasos >10min: teto 80%. 1 saída antecipada: teto 80%, 2ª: teto 70%.</div></div>';
 
   box.innerHTML=html;
 }
@@ -7809,7 +7856,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.5.0';
+const VERSAO = '4.8.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -8370,7 +8417,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, { remapearSigla, renderMapaSiglas, migrar2Ombros, fundirOperacoes, previewFusao, preencherFusao, opsComUso, voltarALer, previewRemocao, removerImportados, preencherRemocao, ciclosImportadosDe, arquivoIgnorado, chaveArquivo, mediaDiaFamiliaMes, mesAtualKey, rotuloMesCurto, escolherPasta, varrerPasta, desligarPasta, religarPasta, salvarApelidos, renderPasta, pessoaDoArquivo, mesDaPasta, anoDaPasta, avancoFaixa, horasMesRef, pertoDeSubir, mesMaisRecenteComProducao, sincronizarMetas, confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, pctProducaoPorRitmo, pctDoRitmo, setOverride, limparOverride, ajustarPremio});
+Object.assign(window, { fecharNaFaixa, remapearSigla, renderMapaSiglas, migrar2Ombros, fundirOperacoes, previewFusao, preencherFusao, opsComUso, voltarALer, previewRemocao, removerImportados, preencherRemocao, ciclosImportadosDe, arquivoIgnorado, chaveArquivo, mediaDiaFamiliaMes, mesAtualKey, rotuloMesCurto, escolherPasta, varrerPasta, desligarPasta, religarPasta, salvarApelidos, renderPasta, pessoaDoArquivo, mesDaPasta, anoDaPasta, avancoFaixa, horasMesRef, pertoDeSubir, mesMaisRecenteComProducao, sincronizarMetas, confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, pctProducaoPorRitmo, pctDoRitmo, setOverride, limparOverride, ajustarPremio});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
