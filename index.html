@@ -3267,7 +3267,7 @@ function migrarOpsBase(){
 /* consolida as variações de lateral: arremate não conta mais; 0-1 etiqueta = LATERAL.
    roda uma vez, reescrevendo o histórico pra os números baterem. */
 function migrarLaterais(){
-  if(S.lateralRev >= 1) return;
+  if(S.lateralRev >= 2) return;
   const mapa={
     'LATERALARREMATE':'LATERAL',
     'LATERALARREMATE1ETIQ':'LATERAL',
@@ -3297,14 +3297,29 @@ function migrarLaterais(){
     S.opsBase=S.opsBase.filter(o=>!mapa[o.id]);
     const lat=S.opsBase.find(o=>o.id==='LATERAL'); if(lat) lat.nome='Lateral';
   }
-  S.lateralRev=1;
+  // o mapa de nomes de planilha também tem que apontar pra operação consolidada,
+  // senão a próxima importação recria a duplicata que acabamos de eliminar
+  S.mapaOps=S.mapaOps||{};
+  Object.keys(S.mapaOps).forEach(sig=>{ const alvo=CONSOLIDA_OP[S.mapaOps[sig]]; if(alvo) S.mapaOps[sig]=alvo; });
+  // e o cadastro não pode continuar exibindo a variação consolidada como se fosse
+  // operação separada (aparecia duplicada na Calibração, pedindo meta própria)
+  S.opsBase=(S.opsBase||[]).filter(o=>!CONSOLIDA_OP[o.id]);
+  if(S.metasVar) Object.keys(S.metasVar).forEach(k=>{ if(CONSOLIDA_OP[k.split('|')[0]]) delete S.metasVar[k]; });
+  (S.marcas||[]).forEach(m=>{
+    if(!Array.isArray(m.etapas)) return;
+    m.etapas=m.etapas.map(e=>{ const id=(e&&e.opId)||e; const alvo=CONSOLIDA_OP[id];
+      if(!alvo) return e; return (typeof e==='object')? Object.assign({}, e, {opId:alvo}) : alvo; });
+    const vistos=new Set();
+    m.etapas=m.etapas.filter(e=>{ const id=(e&&e.opId)||e; if(vistos.has(id)) return false; vistos.add(id); return true; });
+  });
+  S.lateralRev=2;
 }
-/* "FECHAR 2 OMBROS" tinha caído em "2 ombros e gola", que é outra operação (gola é
-   trabalho a mais) e por isso ficava sem meta. Conserta o mapa e os lançamentos que
-   vieram por esse caminho. Não toca em nada que tenha GOLA ou ETIQUETA no nome. */
+/* Fechar os 2 ombros aparecia nas planilhas com vários nomes ("FECHAR 2 OMBROS",
+   "2 OMBROS E GOLA") e cada um virou uma operação, quase sempre sem meta. É tudo a
+   mesma coisa, com a mesma meta da versão com etiqueta. Junta tudo em OMBROS2. */
 function migrar2Ombros(){
-  if(S.ombros2Rev) return;
-  S.ombros2Rev=1;
+  if(S.ombros2Rev >= 2) return;
+  S.ombros2Rev=2;
   if(!S.opsBase.some(o=>o.id==='OMBROS2')){
     const ref=S.opsBase.find(o=>o.id==='OMBROS2ETIQ');
     const i=S.opsBase.findIndex(o=>o.id==='OMBROARREMATE');
@@ -3313,24 +3328,43 @@ function migrar2Ombros(){
   }
   const errados=new Set();
   Object.keys(S.mapaOps||{}).forEach(sig=>{
-    if(/2\s*OMBROS?/.test(' '+sig+' ') && !/ET[IQ]/.test(sig) && !/GOLA/.test(sig)){
+    if(/2\s*OMBROS?/.test(' '+sig+' ') && !/ET[IQ]/.test(sig)){
       if(S.mapaOps[sig]!=='OMBROS2'){ errados.add(S.mapaOps[sig]); S.mapaOps[sig]='OMBROS2'; }
     }
   });
   // move os lançamentos que estavam na operação errada, mas SÓ os que vieram de planilha
   // com esse nome. Sem o texto original guardado, não dá pra separar com segurança:
   // então só mexe quando a operação de destino não tem mais nenhum outro nome apontando.
+  // operações já cadastradas cujo NOME é fechar-os-2-ombros (com ou sem gola):
+  // absorve o id inteiro, porque a operação não deveria existir separada
+  (S.opsBase||[]).forEach(o=>{
+    if(o.id==='OMBROS2') return;
+    const n=normOp(o.nome||'');
+    if(/2\s*OMBROS?/.test(' '+n+' ') && !/ET[IQ]/.test(n)) errados.add(o.id);
+  });
+  const ehFecharOmbros=t=>{ const n=normOp(t||''); return /2\s*OMBROS?/.test(' '+n+' ') && !/ET[IQ]/.test(n); };
+  (S.ciclos||[]).forEach(c=>{
+    const id=opBaseDe(c);
+    if(id==='OMBROS2') return;
+    if(ehFecharOmbros(c.origTxt) || ehFecharOmbros(c.rotulo)) errados.add(id);
+  });
   errados.forEach(idErrado=>{
-    const aindaUsada=Object.values(S.mapaOps||{}).some(v=>v===idErrado);
-    if(aindaUsada) return;
+    if(!idErrado || idErrado==='OMBROS2') return;
+    Object.keys(S.mapaOps||{}).forEach(sig=>{ if(S.mapaOps[sig]===idErrado) S.mapaOps[sig]='OMBROS2'; });
     (S.ciclos||[]).forEach(c=>{
-      if(!c.importado) return;
       if(opBaseDe(c)!==idErrado) return;
-      if(c.origTxt && (!/2\s*OMBROS?/.test(' '+normOp(c.origTxt)+' ') || /ET[IQ]|GOLA/.test(normOp(c.origTxt)))) return;
       const resto=(c.opKey||c.op||'').split('|').slice(1);
       c.opKey=['OMBROS2'].concat(resto).join('|'); c.op=c.opKey; c.rotulo='Os 2 ombros'; c.ts=Date.now();
     });
-    S.opsBase=(S.opsBase||[]).filter(o=>o.id!==idErrado || (S.ciclos||[]).some(c=>opBaseDe(c)===idErrado));
+    if(S.metasVar) Object.keys(S.metasVar).forEach(k=>{ if(k.split('|')[0]===idErrado) delete S.metasVar[k]; });
+    (S.marcas||[]).forEach(m=>{
+      if(!Array.isArray(m.etapas)) return;
+      m.etapas=m.etapas.map(e=>{ const id=(e&&e.opId)||e;
+        if(id!==idErrado) return e; return (typeof e==='object')? Object.assign({}, e, {opId:'OMBROS2'}) : 'OMBROS2'; });
+      const vistos=new Set();
+      m.etapas=m.etapas.filter(e=>{ const id=(e&&e.opId)||e; if(vistos.has(id)) return false; vistos.add(id); return true; });
+    });
+    S.opsBase=(S.opsBase||[]).filter(o=>o.id!==idErrado);
   });
 }
 let S = {cfg:{...CFG_PADRAO}, pessoas:PESSOAS_PADRAO, opsBase:OPS_BASE, metasVar:{}, baselines:BASELINES_PADRAO, marcas:[], ordens:[], ciclos:[]};
@@ -3535,6 +3569,7 @@ const CONSOLIDA_OP={
   'LATERALARREMATE2ETIQ':'LATERAL2ETIQ',
   'LATERALARREMATE3ETIQ':'LATERAL3ETIQ'
 };
+function opCanonica(id){ return CONSOLIDA_OP[id] || id; }
 function opBaseDe(c){
   const base=(c.opKey||c.op||'').split('|')[0];
   return CONSOLIDA_OP[base] || base;
@@ -3706,6 +3741,13 @@ function fecharNaFaixa(pct){
   if(pct<69) return Math.floor(pct);          // sem faixa: nunca exibe um 69 que não ganha
   return Math.min(100, Math.round(pct/10)*10);
 }
+/* O "DA META" da ficha usava ritmo ÷ meta de 100%, e não a faixa alcançada. Isso
+   inflava o número quando as faixas não são lineares: a Valdirene fez 89 pçs/h numa
+   gola cuja faixa de 90% pede 95, ficou em 80% na linha da operação e mesmo assim o
+   geral dela saía 90%. Nenhuma operação em 90% e o total em 90% — não fecha, e é o
+   número que ela lê primeiro.
+   Agora o geral usa exatamente a mesma conta do prêmio (pctDoRitmo, ponderado por
+   horas), então a ficha e a tela de Prêmios não podem mais discordar. */
 function pctGeralPessoa(a){
   if(!a || !a.ops) return null;
   const comMeta=a.ops.filter(o=>o.temMeta && o.pct!==null);
@@ -3738,7 +3780,10 @@ function analisePessoa(pid, dias, de, ate){
     const [m70,,,m100]=metasDe(k);
     const f=faixaDe(k, md);
     return {key:k, rotulo:g.rotulo, pcs:g.pcs, horas:h, media:md, meta:m100||0,
-            temMeta:!!m70, faixa:f.tx, cls:f.cls, margem:f.margem, pct:f.pct,
+            temMeta:!!m70, faixa:f.tx, cls:f.cls, margem:f.margem,
+            // pct = a FAIXA que ela alcançou (a mesma conta do prêmio), não o ritmo
+            // dividido pela meta de 100%. Ver o comentário em pctGeralPessoa.
+            pct:(m70? pctDoRitmo(md, metasDe(k)) : null), pctCru:f.pct,
             horasDia:h/dOp, nDiasOp:dOp, falta:faltaPra(k, md, h), avanco:avancoFaixa(k, g.pcs, h, dOp),
             melhor:melhorDaCelula(k, dias, pid, de, ate)};
   }).sort((a,b)=>b.horas-a.horas);
@@ -5199,9 +5244,10 @@ function opDaPlanilha(sigla){
   if(/ARREMATE/.test(s) && /OMBRO/.test(s)) return 'OMBROARREMATE';
   if(/^ARREMATE$/.test(sigla)) return 'OMBROARREMATE';
   if(/2\s*OMBROS?/.test(s) && /ET[IQ]/.test(s)) return 'OMBROS2ETIQ';
-  // "FECHAR 2 OMBROS" / "2 OMBROS": sem etiqueta e sem gola é operação própria,
-  // com a mesma meta da versão com etiqueta.
-  if(/2\s*OMBROS?/.test(s) && !/GOLA/.test(s)) return 'OMBROS2';
+  // "FECHAR 2 OMBROS", "2 OMBROS", "2 OMBROS E GOLA": tudo isso é fechar os ombros,
+  // mesma operação e mesma meta da versão com etiqueta. A gola aqui faz parte do
+  // fechamento, não é uma operação separada.
+  if(/2\s*OMBROS?/.test(s)) return 'OMBROS2';
   if(/^1\s*OMBRO$/.test(sigla)) return 'OMBRO1';
   if(/^PREGAR MANGA$|^MANGA$/.test(sigla)) return 'MANGA';
   if(/^BARRA$|BAINHA.*BARRA/.test(sigla)) return 'BAINHABARRA';
@@ -6598,7 +6644,7 @@ function dadosOp(opId){
   let pcs=0, ms=0;
   S.ciclos.forEach(c=>{
     if(!c.fim || c.flag || c.lote) return;
-    if((c.opKey||c.op||'').split('|')[0]!==opId) return;
+    if(opBaseDe(c)!==opCanonica(opId)) return;   // respeita a consolidação (arremate = lateral)
     const k=c.pessoa+'|'+new Date(c.ini).toDateString();
     if(!porDia[k]) porDia[k]={pcs:0, ms:0};
     porDia[k].pcs+=qtdEfetiva(c); porDia[k].ms+=tempoUtil(c);
@@ -7448,7 +7494,7 @@ function metaSuspeita(opId){
   return null;
 }
 function renderCalibra(){
-  const semMeta=S.opsBase.filter(o=>!o.metas || !o.metas[0]);
+  const semMeta=S.opsBase.filter(o=>(!o.metas || !o.metas[0]) && !CONSOLIDA_OP[o.id]);
   const comDados=semMeta.map(o=>({op:o, d:dadosOp(o.id), sug:metasSugeridas(o.id)})).filter(x=>x.d.horas>0);
   const prontas=comDados.filter(x=>x.sug).length;
   let topo='';
@@ -7487,7 +7533,7 @@ function renderCalibra(){
       '<td>'+stat+'</td><td>'+btn+'</td></tr>';
   });
   // 2) as que já têm meta (só pra conferir contra o real)
-  const comMeta=S.opsBase.filter(o=>o.metas && o.metas[0]).map(o=>({op:o, d:dadosOp(o.id)})).filter(x=>x.d.horas>0);
+  const comMeta=S.opsBase.filter(o=>o.metas && o.metas[0] && !CONSOLIDA_OP[o.id]).map(o=>({op:o, d:dadosOp(o.id)})).filter(x=>x.d.horas>0);
   if(comMeta.length){
     html+='<tr><td colspan="5" style="padding-top:12px;"><b class="mini-info">JÁ TÊM META (real x meta)</b></td></tr>';
     comMeta.sort((a,b)=>b.d.horas-a.d.horas).forEach(({op,d})=>{
@@ -7864,7 +7910,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.9.0';
+const VERSAO = '4.12.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -8425,7 +8471,7 @@ document.addEventListener('keydown', e=>{
   }
 });
 /* expor no window as funções usadas em onclick */
-Object.assign(window, { fecharNaFaixa, remapearSigla, renderMapaSiglas, migrar2Ombros, fundirOperacoes, previewFusao, preencherFusao, opsComUso, voltarALer, previewRemocao, removerImportados, preencherRemocao, ciclosImportadosDe, arquivoIgnorado, chaveArquivo, mediaDiaFamiliaMes, mesAtualKey, rotuloMesCurto, escolherPasta, varrerPasta, desligarPasta, religarPasta, salvarApelidos, renderPasta, pessoaDoArquivo, mesDaPasta, anoDaPasta, avancoFaixa, horasMesRef, pertoDeSubir, mesMaisRecenteComProducao, sincronizarMetas, confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, pctProducaoPorRitmo, pctDoRitmo, setOverride, limparOverride, ajustarPremio});
+Object.assign(window, { opCanonica, fecharNaFaixa, remapearSigla, renderMapaSiglas, migrar2Ombros, fundirOperacoes, previewFusao, preencherFusao, opsComUso, voltarALer, previewRemocao, removerImportados, preencherRemocao, ciclosImportadosDe, arquivoIgnorado, chaveArquivo, mediaDiaFamiliaMes, mesAtualKey, rotuloMesCurto, escolherPasta, varrerPasta, desligarPasta, religarPasta, salvarApelidos, renderPasta, pessoaDoArquivo, mesDaPasta, anoDaPasta, avancoFaixa, horasMesRef, pertoDeSubir, mesMaisRecenteComProducao, sincronizarMetas, confirmarCiclo, cancelarCiclo, proporCiclo, lacResolver, lacEscolherPessoa, cancelarLacuna, lacSnooze, renderLacOpcoes, resolverEmpacado, renderOcorrencias, fazerLogin, sair, salvarAcesso, mudarModoPacote, alternarLote, fecharLote, cancelarLote, removerDoLote, escolherOp, renderOpPicker, reterPecas, liberarRetido, imprimirEtiquetaPacote, selecionarPessoa, renderPessoaPicker, importarNotaClick, importarNotaXML, parseNFe, addOpBase, setMetaBase, removerOpBase, desfazerUltimo, renderDesfazer, agendarAutoConfirm, cancelAutoConfirm, feedbackBip, importarPlanilhaClick, importarPlanilha, lerPlanilhaProducao, normOp, desfazerImportacao, renderImportacoes, confirmarMapaOps, cancelarMapaOps, abrirMapaOps, gravarImportacao, renderEnvioDia, envioHoje, envioSemana, envioMes, periodoEnvio, rotuloPeriodo, opDaPlanilha, limparImportados, migrarOpsBase, checarMapaRepetido, refPonderada, dadosOp, metasSugeridas, aplicarMetaSugerida, aplicarTodasSugestoes, percentil, renderMinha, salvarAcessoDono, trocarSenhaPessoa, novaSenhaPessoa, imprimirAcessos, gerarAcessoPessoa, ritmoEtapa, horasRestantesOP, capacidadeDiaCelula, horasUteisDia, filaOPs, statusOP, qrSVG, montarImpressao, editarPacotes, renderPacotesEdit, pacQtd, pacAdd, pacDel, pacRedividir, salvarPacotes, cancelarPacotes, bipadoNoPacote, pacTotal, pacAjustar, mesclarEstado, mesclarListas, registrarRemocao, fecharCiclosVelhos, tetoAberto, excluirOP, renderDiaDia, ddHoje, ddOntem, familiaDe, renderMeta, ritmoSustentadoFamilia, renderCronoHist, mudarMetaDiaria, cmpUltimos, renderCompararDias, nomeMae, renderMesAMes, salvarReal, camisetasEstimadas, metaTrocaModo, metaPeriodo, metaMesesDisponiveis, diasUteisNoIntervalo, renderPremios, setPresenca, calcularPremio, valorProducao, producaoPessoaMes, registrarAusencias, pctProducaoPorRitmo, pctDoRitmo, setOverride, limparOverride, ajustarPremio});
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); fazerLogin(); } });
 setInterval(()=>{ const t=new Date().toLocaleTimeString('pt-BR'); relogio.textContent=t; const tv=document.getElementById('tvRelogio'); if(tv) tv.textContent=t; },1000);
 setInterval(()=>{ if(document.querySelector('#t-painel.on')){ renderSaida(); renderPainelOps(); renderPainel(); } },30000);
