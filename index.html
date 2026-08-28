@@ -4005,8 +4005,9 @@ function avancoFaixa(opKey, pcs, horas, nDias){
     // buraco grande: a tradução em minutos vira bloco de 3 minutos e para de ajudar
     texto = base+' São cerca de '+Math.ceil(faltaH)+' pçs/h a mais.';
   }
-  return {topo:false, faixaTx:prox.tx, faltaPcs, faltaDia, faltaH, minutos, alvo, ritmo,
-          perto:(faltaH<=12), texto, curto:'+'+faltaDia+' pç/dia → '+prox.tx};
+  return {topo:false, faixaTx:prox.tx, faltaPcs, faltaDia, faltaH, minutos, alvo, ritmo, metaProx:prox.meta,
+          perto:(faltaH<=12), texto,
+          curto:'+'+faltaDia+' pç/dia → '+prox.tx+' <span class="mini-info">('+Math.round(prox.meta)+' pçs/h)</span>'};
 }
 function baseline(pessoa, opKey){
   const fech=S.ciclos.filter(c=>c.pessoa===pessoa && c.opKey===opKey && c.fim && !c.flag && !c.lote);
@@ -6470,14 +6471,21 @@ function renderPainelCelula(){
       '</div>';
 
     html+='<table style="margin-top:12px;"><tr><th>Operação</th>'+
-      '<th>Seu ritmo</th><th>Meta 100%</th><th>Faixa</th><th>Pra subir</th></tr>';
+      '<th>Seu ritmo</th><th>O que cada faixa pede</th><th>Faixa</th><th>Pra subir</th></tr>';
     a.ops.forEach(o=>{
       const av=o.avanco;
       const sobe = !o.temMeta? '—' : (!av? '—' : (av.topo? '<b>no topo 🏆</b>' : '<b>'+av.curto+'</b>'));
+      const mm=o.temMeta? metasDe(o.key) : null;
+      const reguaTx = (mm && mm[0])
+        ? ['70','80','90','100'].map((f,i)=>{
+            const dentro = o.media>=mm[i];
+            return '<span style="'+(dentro?'font-weight:700;color:#3d4d32;':'color:#8a8a7a;')+'">'+f+'%: '+Math.round(mm[i])+'</span>';
+          }).join(' <span style="color:#ccc;">·</span> ')+' <span class="mini-info">pçs/h</span>'
+        : '<span style="color:#b23b3b;">não cadastrada</span>';
       html+='<tr>'+
         '<td><b>'+o.rotulo+'</b></td>'+
         '<td><b>'+Math.round(o.media)+'</b> pçs/h</td>'+
-        '<td>'+(o.meta? Math.round(o.meta)+' pçs/h' : '<span style="color:#b23b3b;">não cadastrada</span>')+'</td>'+
+        '<td>'+reguaTx+'</td>'+
         '<td><span class="faixa '+o.cls+'"'+(o.margem?' title="subiu pela margem de apuração"':'')+'>'+(o.temMeta? o.faixa : 'sem meta')+'</span></td>'+
         '<td>'+sobe+'</td>'+
       '</tr>';
@@ -7856,7 +7864,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.8.0';
+const VERSAO = '4.9.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
