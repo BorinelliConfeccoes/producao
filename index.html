@@ -7084,9 +7084,68 @@ function presencaDe(ym, pid){
   S.presenca[ym][pid]=S.presenca[ym][pid]||{faltas:0, atestados:0, atrasos:0, saidas:0, _dias:{}};
   return S.presenca[ym][pid];
 }
+/* a célula da tabela de Prêmios: o número, os dias marcados (clicáveis pra tirar)
+   e um seletor de data pra acrescentar à mão */
+function celulaAusencia(ym, pid, campo, pres, inp){
+  const dts=((pres.datas)||{})[campo]||[];
+  const cor = campo==='faltas'? '#b23b3b' : '#8a6a2e';
+  let h=inp(campo, pres[campo]);
+  if(dts.length){
+    h+='<div style="margin-top:3px; line-height:1.6;">'+dts.map(iso=>{
+      const d=iso.split('-'); 
+      return '<span onclick="tirarAusencia(\''+ym+'\',\''+pid+'\',\''+campo+'\',\''+iso+'\')" title="clique para tirar este dia" '+
+        'style="cursor:pointer; display:inline-block; background:#f1ede4; color:'+cor+'; border-radius:9px; padding:1px 7px; margin:1px 2px 1px 0; font-size:.72rem; white-space:nowrap;">'+
+        d[2]+'/'+d[1]+' ×</span>';
+    }).join('')+'</div>';
+  }
+  const primeiro=ym+'-01';
+  const [yy,mm]=ym.split('-').map(Number);
+  const ultimo=ym+'-'+String(new Date(yy,mm,0).getDate()).padStart(2,'0');
+  h+='<div style="margin-top:3px; white-space:nowrap;">'+
+     '<input type="date" id="dtAus-'+pid+'-'+campo+'" min="'+primeiro+'" max="'+ultimo+'" style="font-size:.7rem; padding:1px 3px; width:118px;">'+
+     '<button class="acao mini sec" style="padding:2px 6px; margin-left:3px;" onclick="addAusencia(\''+ym+'\',\''+pid+'\',\''+campo+'\')" title="marcar este dia">+</button></div>';
+  return h;
+}
 function setPresenca(ym, pid, campo, valor){
   const p=presencaDe(ym, pid);
   p[campo]=Math.max(0, Math.floor(Number(valor)||0));
+  // se o número caiu abaixo da quantidade de dias marcados, corta as datas sobrando
+  p.datas=p.datas||{};
+  if(p.datas[campo] && p.datas[campo].length > p[campo]) p.datas[campo]=p.datas[campo].slice(0, p[campo]);
+  salvarTudo(); renderPremios();
+}
+/* ---- marcar falta à mão, com o DIA ----
+   A planilha cobre a maior parte, mas nem sempre a falta está escrita lá (combinada na
+   hora, atestado entregue depois). Aqui o Patrick acrescenta e tira falta por data. */
+function addAusencia(ym, pid, campo){
+  const inp=document.getElementById('dtAus-'+pid+'-'+campo);
+  let iso=inp && inp.value;
+  if(!iso){ alert('Escolha o dia primeiro.'); if(inp) inp.focus(); return; }
+  const p=presencaDe(ym, pid);
+  p.datas=p.datas||{}; p.datas[campo]=p.datas[campo]||[];
+  if(iso.slice(0,7)!==ym){
+    if(!confirm('O dia '+iso.split('-').reverse().join('/')+' não é de '+ym+'.\n\nMarcar mesmo assim?')) return;
+  }
+  if(p.datas[campo].indexOf(iso)>=0) return alert('Esse dia já está marcado.');
+  p.datas[campo].push(iso); p.datas[campo].sort();
+  p[campo]=Math.max(Number(p[campo]||0)+1, p.datas[campo].length);
+  // trava a reimportação de recontar o mesmo dia
+  const tipo={faltas:'falta', atestados:'atestado', atrasos:'atraso', saidas:'saida'}[campo];
+  if(tipo){ const [yy,mm,dd]=iso.split('-').map(Number);
+    p._dias=p._dias||{}; p._dias[pid+'|'+new Date(yy,mm-1,dd).toDateString()+'|'+tipo]=true; }
+  if(inp) inp.value='';
+  salvarTudo(); renderPremios();
+}
+function tirarAusencia(ym, pid, campo, iso){
+  const p=presencaDe(ym, pid);
+  if(!p.datas || !p.datas[campo]) return;
+  const nome={faltas:'falta', atestados:'atestado', atrasos:'atraso', saidas:'saída antecipada'}[campo]||campo;
+  if(!confirm('Tirar a '+nome+' do dia '+iso.split('-').reverse().join('/')+'?')) return;
+  p.datas[campo]=p.datas[campo].filter(x=>x!==iso);
+  p[campo]=Math.max(0, Number(p[campo]||0)-1);
+  const tipo={faltas:'falta', atestados:'atestado', atrasos:'atraso', saidas:'saida'}[campo];
+  if(tipo && p._dias){ const [yy,mm,dd]=iso.split('-').map(Number);
+    delete p._dias[pid+'|'+new Date(yy,mm-1,dd).toDateString()+'|'+tipo]; }
   salvarTudo(); renderPremios();
 }
 // calcula assiduidade e produção de uma pessoa num mês
@@ -7300,7 +7359,7 @@ function renderPremios(){
   if(!pids.length){ box.innerHTML='<div class="card mini-info">Ninguém produziu neste mês.</div>'; return; }
 
   let html='<div class="card" style="background:#fdf6e9; border-left:4px solid #c7a581;"><div class="mini-info">'+
-    '<b>Faltas, atestados, atrasos e saídas ainda são preenchidos à mão aqui.</b> Assim que definirmos como isso aparece na planilha, o sistema lê sozinho. Por enquanto, digite os números de cada pessoa e o cálculo já roda pelas regras.</div></div>';
+    '<b>Faltas e atestados vêm sozinhos da planilha (coluna escrita FALTA ou ATESTADO). Aqui você confere, e pode acrescentar ou tirar um dia na mão com o seletor de data.</b> Clique num dia marcado para tirá-lo.</div></div>';
 
   html+='<div class="card" style="overflow-x:auto;"><table>'+
     '<tr><th>Pessoa</th><th>Dias</th><th>Peças</th><th>Faltas</th><th>Atestados</th><th>Atrasos>10min</th><th>Saídas</th><th>% Produção</th>'+
@@ -7328,12 +7387,10 @@ function renderPremios(){
     html+='<tr><td><b>'+nome+'</b>'+(r.ajustado?' <span title="'+(r.motivoAjuste||'ajuste manual')+'" style="cursor:help;">✏️</span>':'')+'</td>'+
       '<td>'+r.dias+'</td>'+
       '<td>'+r.pcs+'</td>'+
-      '<td>'+inp('faltas',pres.faltas)+
-        ((pres.datas&&pres.datas.faltas&&pres.datas.faltas.length)? '<div class="mini-info" style="color:#b23b3b;">'+listaDatasBR(pres.datas.faltas)+'</div>' : '')+'</td>'+
-      '<td>'+inp('atestados',pres.atestados)+
-        ((pres.datas&&pres.datas.atestados&&pres.datas.atestados.length)? '<div class="mini-info">'+listaDatasBR(pres.datas.atestados)+'</div>' : '')+'</td>'+
-      '<td>'+inp('atrasos',pres.atrasos)+'</td>'+
-      '<td>'+inp('saidas',pres.saidas)+'</td>'+
+      '<td>'+celulaAusencia(ym,pid,'faltas',pres,inp)+'</td>'+
+      '<td>'+celulaAusencia(ym,pid,'atestados',pres,inp)+'</td>'+
+      '<td>'+celulaAusencia(ym,pid,'atrasos',pres,inp)+'</td>'+
+      '<td>'+celulaAusencia(ym,pid,'saidas',pres,inp)+'</td>'+
       '<td>'+r.pctFinal+'%'+(r.teto<100?' <span class="mini-info">(teto '+r.teto+'%)</span>':'')+
         (r.opsSemMeta && r.opsSemMeta.length? ' <span title="Operações sem faixa cadastrada, ficaram de fora do %: '+r.opsSemMeta.join(', ')+'" style="cursor:help; color:#b23b3b;">⚠</span>':'')+
         '<br><button class="acao mini sec" style="margin-top:4px;" onclick="verConta(\''+pid+'\')">ver conta</button></td>'+
@@ -8065,7 +8122,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.18.0';
+const VERSAO = '4.19.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});

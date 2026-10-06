@@ -1,4 +1,4 @@
-const CACHE = 'borinelli-prod-v118';
+const CACHE = 'borinelli-prod-v119';
 const ARQUIVOS = [
   './index.html',
   './manifest.json',
