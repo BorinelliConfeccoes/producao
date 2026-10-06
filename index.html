@@ -2415,6 +2415,10 @@ td{padding:8px 6px; border-bottom:1px solid var(--linha); vertical-align:middle;
   body.print-painel .ficha th, body.print-painel .ficha td{padding:1.5mm 2mm;}
   body.print-painel .ficha .mini-info{font-size:7.5pt;}
   body.print-painel .notaFicha{margin-top:3mm; padding:2.5mm 3mm; font-size:9pt;}
+  /* o bloco do prêmio é o que o Patrick leva pra conversa: não pode quebrar no meio */
+  body.print-painel .nfPremio{break-inside:avoid; page-break-inside:avoid;}
+  body.print-painel .tbPremio{width:auto; font-size:9.5pt; margin-top:2mm;}
+  body.print-painel .tbPremio td{padding:1mm 4mm 1mm 0;}
   body.print-painel .barrameta{width:70px !important;}
   @page{margin:10mm;}
 }
@@ -2426,6 +2430,8 @@ td{padding:8px 6px; border-bottom:1px solid var(--linha); vertical-align:middle;
 .nfBom{background:#f1f5ec; border-left:4px solid #3d4d32;}
 .nfPasso{background:#f9f4ea; border-left:4px solid #b06b3a;}
 .nfMeta{background:#eef3f8; border-left:4px solid #3a6b8f;}
+.nfPremio{background:#fbf7ec; border-left:4px solid #8a7a2e;}
+.tbPremio td{padding:3px 10px 3px 0; border:0;}
 .linhaform{display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:10px;}
 .subtabs{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px;}
 .subtabs button{padding:8px 16px; border-radius:999px; border:1.5px solid var(--verde); background:#fff; color:var(--verde); font-weight:700; font-size:.82rem; cursor:pointer;}
@@ -6575,7 +6581,7 @@ function renderPainelCelula(){
   let html='<div class="card naoimprimir"><b>Painel da célula</b> · '+rotuloPer+' · '+fichas.length+' pessoas'+
     '<div class="mini-info">Ordenado de quem está mais longe da meta para quem está mais perto.</div></div>';
 
-  fichas.forEach(({nome, a})=>{
+  fichas.forEach(({pid, nome, a})=>{
     const g=pctGeral(a);
     const gTx = g===999? '—' : fecharNaFaixa(g)+'%';
     const cor = g===999? '#666' : (fecharNaFaixa(g)>=100?'#3d4d32': fecharNaFaixa(g)>=80?'#8a7a2e':'#b06b3a');
@@ -6633,9 +6639,60 @@ function renderPainelCelula(){
       (a.toque? '<div style="margin-top:6px; font-style:italic;">'+a.toque+'</div>' : '')+'</div>';
     if(a.sugestao) html+='<div class="notaFicha nfPasso"><b>O próximo passo</b><br>'+a.sugestao.txt+'</div>';
     if(a.paradas && a.paradas.n) html+='<div class="mini-info" style="margin-top:6px;">Paradas acima de '+(Number(S.cfg.paradaMin)||10)+' min: '+a.paradas.n+' no período, média de '+Math.round(a.paradas.msDia/60000)+' min por dia.</div>';
+    html+=blocoPremioFicha(pid);
     html+='</div>';
   });
   box.innerHTML=html;
+}
+/* O bloco do prêmio na folha que vai pra mão da pessoa: os valores, as faltas com os
+   dias, e quanto ela deixou de receber. Aqui FALAR EM DINHEIRO É O PONTO — diferente
+   do aviso de faixa, que continua só em peça e minuto. */
+function mesDoPeriodoPainel(){
+  const de=(document.getElementById('pnDe')||{}).value, ate=(document.getElementById('pnAte')||{}).value;
+  const base = ate || de; if(!base) return null;
+  return base.slice(0,7);
+}
+function blocoPremioFicha(pid){
+  const ym=mesDoPeriodoPainel(); if(!ym) return '';
+  let r; try{ r=calcularPremio(ym, pid); }catch(e){ return ''; }
+  if(!r) return '';
+  const pres=presencaDe(ym, pid)||{faltas:0,atestados:0,atrasos:0,saidas:0};
+  const [yy,mm]=ym.split('-');
+  const mesTx=new Date(Number(yy),Number(mm)-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
+  const brl=v=>'R$ '+Number(v||0).toLocaleString('pt-BR');
+
+  // quanto teria recebido se não houvesse falta/atestado/atraso/saída
+  const semNada = PREMIO_ASSIDUIDADE + valorProducao(r.pctProd!=null? fecharNaFaixa(Math.min(100,r.pctProd)) : r.pctFinal).valor;
+  const perdeu = Math.max(0, semNada - r.total);
+
+  const linhas=[];
+  const dts=(pres.datas)||{};
+  const cd=(n,tipo,rS,rP)=>{ if(!n) return null; const d=listaDatasBR(dts[tipo]); return n+' '+(n>1?rP:rS)+(d? ' <b>('+d+')</b>' : ''); };
+  [cd(pres.faltas,'faltas','falta sem justificativa','faltas sem justificativa'),
+   cd(pres.atestados,'atestados','atestado','atestados'),
+   cd(pres.atrasos,'atrasos','atraso acima de 10 min','atrasos acima de 10 min'),
+   cd(pres.saidas,'saidas','saída antecipada','saídas antecipadas')].forEach(x=>{ if(x) linhas.push(x); });
+
+  let h='<div class="notaFicha nfPremio"><b>💰 Prêmio de '+mesTx+'</b>'+
+    '<table class="tbPremio" style="margin-top:8px;"><tr>'+
+    '<td>Assiduidade</td><td style="text-align:right;"><b>'+brl(r.assid)+'</b></td>'+
+    '<td class="mini-info">'+(r.motivoAssid||'')+'</td></tr><tr>'+
+    '<td>Produção</td><td style="text-align:right;"><b>'+brl(r.premioProd)+'</b></td>'+
+    '<td class="mini-info">'+(r.faixaProd? 'faixa '+r.faixaProd+'%' : (r.motivoProd||''))+'</td></tr>'+
+    '<tr><td><b>Total</b></td><td style="text-align:right; font-size:1.15rem;"><b>'+brl(r.total)+'</b></td><td></td></tr></table>';
+
+  if(linhas.length) h+='<div style="margin-top:8px; color:#b23b3b;"><b>Ausências no mês:</b><br>'+linhas.join('<br>')+'</div>';
+  else h+='<div style="margin-top:8px; color:#4d7c2a;">✓ Nenhuma falta, atestado, atraso ou saída antecipada no mês.</div>';
+
+  if(perdeu>0){
+    h+='<div style="margin-top:8px; padding:6px 9px; background:#fdf2f1; border-radius:6px;">'+
+       '<b>Deixou de receber '+brl(perdeu)+'</b> neste mês.'+
+       (r.motivoProd? '<br><span class="mini-info">'+r.motivoProd+'.</span>' : '')+
+       (pres.faltas>=2? '<br><span class="mini-info">A regra: 1 falta sem justificativa não tira nada; a partir de 2 zera assiduidade e produção.</span>' : '')+
+       '</div>';
+  }
+  if(r.ajustado) h+='<div class="mini-info" style="margin-top:6px;">Valor ajustado manualmente'+(r.motivoAjuste? ': '+r.motivoAjuste : '')+'.</div>';
+  return h+'</div>';
 }
 function renderEnvioDia(){
   const per=rotuloPeriodo();
@@ -8008,7 +8065,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.17.0';
+const VERSAO = '4.18.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
