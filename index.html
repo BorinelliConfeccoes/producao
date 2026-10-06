@@ -2892,6 +2892,7 @@ nav button.oculto{display:none;}
       <div class="linhaform" style="margin-top:10px;">
         <button class="acao" onclick="escolherPasta()">📂 Escolher a pasta</button>
         <button class="acao sec" onclick="varrerPasta(true)" id="btVarrer">🔄 Conferir agora</button>
+        <button class="acao sec" onclick="relerTudoPasta()" id="btReler">♻️ Reler tudo do zero</button>
         <button class="acao sec alerta" onclick="desligarPasta()" id="btDesligarPasta">Desligar</button>
       </div>
       <div id="pastaPendencias"></div>
@@ -3086,7 +3087,7 @@ const OPS_BASE = [
  {id:'OMBROS2ETIQ', nome:'Os 2 ombros com etiqueta', metas:[90,100,120,130]},
  {id:'OMBROS2', nome:'Os 2 ombros', metas:[90,100,120,130]},   // mesma meta da versão com etiqueta
  {id:'OMBROARREMATE', nome:'Ombro com arremate', metas:[170,190,210,230]},
- {id:'GOLAANEL', nome:'Gola em anel', metas:[85,95,100,110]},
+ {id:'GOLAANEL', nome:'Gola em anel', metas:[80,85,90,100]},   // tabela da planilha (Valdirene)
  {id:'GOLAAPARELHO', nome:'Gola em aparelho overloque', metas:[170,190,210,220]},
  {id:'PESPONTO', nome:'Pesponto reta/cobertura', metas:[160,170,180,200]},
  {id:'REFORCO', nome:'Reforço', metas:[150,180,200,210]},
@@ -3099,8 +3100,8 @@ const OPS_BASE = [
  // "lateral sem etiqueta" e "lateral com 1 etiqueta". As demais variações não têm
  // meta na tabela: ficam zeradas de propósito, pra calibrar pela média real. ---
  {id:'LATERAL', nome:'Lateral', metas:[75,80,90,100]},
- {id:'LATERAL2ETIQ', nome:'Lateral com 2 etiquetas', metas:[0,0,0,0]},
- {id:'LATERAL3ETIQ', nome:'Lateral com 3 etiquetas', metas:[0,0,0,0]},
+ {id:'LATERAL2ETIQ', nome:'Lateral com 2 etiquetas', metas:[70,75,85,95]},   // tabela da planilha (Jackson)
+ {id:'LATERAL3ETIQ', nome:'Lateral com 3 etiquetas', metas:[60,70,80,90]},   // tabela da planilha (Jackson)
  // --- etiqueta avulsa (quando é operação separada) ---
  {id:'ETIQUETA', nome:'Etiqueta', metas:[0,0,0,0]}
 ];
@@ -3317,6 +3318,48 @@ function migrarLaterais(){
 /* Fechar os 2 ombros aparecia nas planilhas com vários nomes ("FECHAR 2 OMBROS",
    "2 OMBROS E GOLA") e cada um virou uma operação, quase sempre sem meta. É tudo a
    mesma coisa, com a mesma meta da versão com etiqueta. Junta tudo em OMBROS2. */
+/* Réguas oficiais, conferidas nas tabelas que vêm dentro das planilhas (Valdirene e
+   Jackson, set/2026). A migração só PREENCHE operação sem meta — nunca troca uma meta
+   que você já cadastrou, porque isso mexeria em prêmio sem você saber. O que diverge
+   aparece na Calibração pra você decidir. */
+const METAS_PLANILHA={
+  OMBROARREMATE:[170,190,210,230], GOLAAPARELHO:[170,190,210,220], PESPONTO:[160,170,180,200],
+  GOLAANEL:[80,85,90,100], MANGA:[75,80,90,100], LATERAL:[75,80,90,100],
+  LATERAL2ETIQ:[70,75,85,95], LATERAL3ETIQ:[60,70,80,90],
+  OMBROS2:[90,100,120,130], OMBROS2ETIQ:[90,100,120,130]
+};
+function divergenciasMeta(){
+  const out=[];
+  (S.opsBase||[]).forEach(o=>{
+    const ref=METAS_PLANILHA[o.id]; if(!ref) return;
+    const m=o.metas||[0,0,0,0];
+    if(!m[0] && !m[3]) return;                       // sem meta: a migração já preencheu
+    if(m.join()!==ref.join()) out.push({id:o.id, nome:o.nome, atual:m.slice(), planilha:ref.slice()});
+  });
+  return out;
+}
+function aplicarMetaPlanilha(id){
+  const o=(S.opsBase||[]).find(x=>x.id===id), ref=METAS_PLANILHA[id];
+  if(!o || !ref) return;
+  if(!confirm('Trocar a meta de "'+o.nome+'"?\n\nde '+(o.metas||[]).join(' / ')+'\npara '+ref.join(' / ')+' (tabela da planilha)\n\nIsso muda a faixa e o prêmio de quem faz essa operação.')) return;
+  o.metas=ref.slice();
+  if(S.metasVar) Object.keys(S.metasVar).forEach(k=>{ if(k.split('|')[0]===id) delete S.metasVar[k]; });
+  salvarTudo(); renderTudo();
+}
+function migrarMetasPlanilha(){
+  if(S.metasPlanRev >= 1) return;
+  S.metasPlanRev=1;
+  (S.opsBase||[]).forEach(o=>{
+    const ref=METAS_PLANILHA[o.id]; if(!ref) return;
+    const m=o.metas||[0,0,0,0];
+    if(!m[0] && !m[3]) o.metas=ref.slice();          // só preenche quem estava sem meta
+  });
+}
+function migrarFaltas(){
+  if(S.faltasRev >= 1) return;
+  S.faltasRev=1;
+  S.pastaCache={};   // força reler a pasta inteira uma vez, agora que as faltas são lidas
+}
 function migrar2Ombros(){
   if(S.ombros2Rev >= 2) return;
   S.ombros2Rev=2;
@@ -3410,7 +3453,7 @@ function ligarBanco(){
       aplicandoRemoto=true;
       const euTinhaMais = mesclarEstado(d);   // junta em vez de sobrescrever
       migrarOpsBase();
-      migrarLaterais(); migrar2Ombros();
+      migrarLaterais(); migrar2Ombros(); migrarFaltas(); migrarMetasPlanilha();
       aplicandoRemoto=false;
       gravarLocal(JSON.stringify(S));
       renderTudo(); preencherCfg();
@@ -3489,7 +3532,7 @@ async function carregar(){
   if(v){ try{ const d=JSON.parse(v); S=Object.assign(S,d); }catch(e){} }
   // migrações
   migrarOpsBase();
-  migrarLaterais(); migrar2Ombros();
+  migrarLaterais(); migrar2Ombros(); migrarFaltas(); migrarMetasPlanilha();
   S.marcas=S.marcas||[]; S.metasVar=S.metasVar||{};
   (S.ordens||[]).forEach(o=>{ o.etapas=o.etapas||[]; o.externos=o.externos||[]; o.chegadas=o.chegadas||[]; o.resolvidos=o.resolvidos||[]; });
   if(S.cfg.empacadoMin===undefined) S.cfg.empacadoMin=45;
@@ -7501,6 +7544,17 @@ function metaSuspeita(opId){
   return null;
 }
 function renderCalibra(){
+  const div=divergenciasMeta();
+  const boxDiv=document.getElementById('calibraTopo');
+  if(boxDiv && div.length){
+    boxDiv.insertAdjacentHTML('afterbegin',
+      '<div class="notaFicha nfPasso" style="margin-bottom:10px;"><b>⚠ Meta diferente da tabela da planilha</b>'+
+      '<div class="mini-info">O sistema está com um número e a tabela que vem dentro das planilhas tem outro. Nada foi trocado sozinho porque isso mexe em prêmio.</div>'+
+      '<table style="margin-top:8px;"><tr><th>Operação</th><th>No sistema</th><th>Na planilha</th><th></th></tr>'+
+      div.map(d=>'<tr><td><b>'+d.nome+'</b></td><td>'+d.atual.join(' / ')+'</td><td><b>'+d.planilha.join(' / ')+'</b></td>'+
+        '<td><button class="acao mini" onclick="aplicarMetaPlanilha(\''+d.id+'\')">Usar a da planilha</button></td></tr>').join('')+
+      '</table></div>');
+  }
   const semMeta=S.opsBase.filter(o=>(!o.metas || !o.metas[0]) && !CONSOLIDA_OP[o.id]);
   const comDados=semMeta.map(o=>({op:o, d:dadosOp(o.id), sug:metasSugeridas(o.id)})).filter(x=>x.d.horas>0);
   const prontas=comDados.filter(x=>x.sug).length;
@@ -7917,7 +7971,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.13.0';
+const VERSAO = '4.15.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -8204,9 +8258,10 @@ async function varrerPasta(manual){
 function renderPasta(){
   preencherRemocao();
   const box=document.getElementById('pastaEstado'); if(!box) return;
-  const bt=document.getElementById('btVarrer'), bd=document.getElementById('btDesligarPasta');
+  const bt=document.getElementById('btVarrer'), bd=document.getElementById('btDesligarPasta'), br=document.getElementById('btReler');
   if(bt) bt.style.display=_pastaHandle?'':'none';
   if(bd) bd.style.display=_pastaHandle?'':'none';
+  if(br) br.style.display=_pastaHandle?'':'none';
   if(!TEM_PASTA_API){
     box.innerHTML='<div class="mini-info" style="color:#b06b3a;">Este navegador não tem esse recurso. Use o Chrome ou o Edge do computador. Aqui continua funcionando o botão de importar.</div>';
     return;
@@ -8452,6 +8507,13 @@ function remapearSigla(sig, selId){
   });
   salvarTudo(); renderTudo();
   alert('Pronto.'+(alvo.length? ' '+alvo.length+' lançamento(s) movidos.' : ''));
+}
+/* "Conferir agora" só relê arquivo que mudou de data ou tamanho. Quando a mudança foi
+   no SISTEMA (uma correção no leitor), os arquivos continuam iguais e seriam pulados. */
+function relerTudoPasta(){
+  if(!_pastaHandle) return alert('Escolha a pasta primeiro.');
+  if(!confirm('Reler todos os arquivos da pasta do zero?\n\nDemora um pouco mais. Nada duplica: lançamento e falta do mesmo dia são reconhecidos e só atualizados.')) return;
+  S.pastaCache={}; salvarTudo(); varrerPasta(true);
 }
 function voltarALer(chave){
   if(!S.pastaIgnorar || !S.pastaIgnorar[chave]) return;
