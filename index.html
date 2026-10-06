@@ -7110,6 +7110,59 @@ function celulaAusencia(ym, pid, campo, pres, inp){
      '<button class="acao mini sec" style="padding:2px 6px; margin-left:3px;" onclick="addAusencia(\''+ym+'\',\''+pid+'\',\''+campo+'\')">ok</button></span></div>';
   return h;
 }
+/* UMA coluna só pras faltas: quantas foram e se tem atestado. Quatro colunas de
+   número abertas ao mesmo tempo era um convite a digitar 10 atestados sem querer. */
+function celulaFaltas(ym, pid, pres){
+  const dts=(pres.datas)||{};
+  const semA=Number(pres.faltas||0), comA=Number(pres.atestados||0);
+  let h='';
+  if(!semA && !comA) h+='<span class="mini-info">sem falta</span>';
+  else {
+    if(semA) h+='<div style="color:#b23b3b;"><b>'+semA+'</b> sem atestado'+
+      (dts.faltas&&dts.faltas.length? ' <span class="mini-info">'+listaDatasBR(dts.faltas)+'</span>':'')+'</div>';
+    if(comA) h+='<div style="color:#8a6a2e;"><b>'+comA+'</b> com atestado'+
+      (dts.atestados&&dts.atestados.length? ' <span class="mini-info">'+listaDatasBR(dts.atestados)+'</span>':'')+'</div>';
+  }
+  const bid='boxF-'+pid;
+  h+='<div style="margin-top:3px;">'+
+     '<a href="#" class="mini-info" style="text-decoration:none;" onclick="abrirAddAus(\''+bid+'\');return false;">+ lançar falta</a>'+
+     (semA||comA? ' <a href="#" class="mini-info" style="text-decoration:none; margin-left:8px;" onclick="zerarFaltas(\''+ym+'\',\''+pid+'\');return false;">limpar</a>' : '')+
+     '<span id="'+bid+'" style="display:none; white-space:nowrap;">'+
+       '<input type="number" min="1" value="1" id="qtF-'+pid+'" style="width:44px; padding:1px 3px; font-size:.75rem;">'+
+       '<select id="tpF-'+pid+'" style="font-size:.72rem; padding:1px 2px; margin-left:3px;">'+
+         '<option value="faltas">sem atestado</option><option value="atestados">com atestado</option></select>'+
+       '<input type="date" id="dtF-'+pid+'" title="dia (opcional)" style="font-size:.7rem; padding:1px 3px; width:112px; margin-left:3px;">'+
+       '<button class="acao mini sec" style="padding:2px 6px; margin-left:3px;" onclick="lancarFalta(\''+ym+'\',\''+pid+'\')">ok</button>'+
+     '</span></div>';
+  return h;
+}
+function lancarFalta(ym, pid){
+  const qt=Math.max(1, Math.floor(Number((document.getElementById('qtF-'+pid)||{}).value)||1));
+  const campo=(document.getElementById('tpF-'+pid)||{}).value||'faltas';
+  const iso=(document.getElementById('dtF-'+pid)||{}).value||'';
+  const p=presencaDe(ym, pid);
+  p.datas=p.datas||{}; p.datas[campo]=p.datas[campo]||[];
+  const tipo={faltas:'falta', atestados:'atestado'}[campo];
+  if(iso){
+    // com dia: só marca 1, e não deixa repetir o mesmo dia
+    if(p.datas[campo].indexOf(iso)>=0) return alert('Esse dia já está marcado.');
+    p.datas[campo].push(iso); p.datas[campo].sort();
+    p[campo]=Math.max(Number(p[campo]||0)+1, p.datas[campo].length);
+    const [yy,mm,dd]=iso.split('-').map(Number);
+    p._dias=p._dias||{}; p._dias[pid+'|'+new Date(yy,mm-1,dd).toDateString()+'|'+tipo]=true;
+  } else {
+    p[campo]=Number(p[campo]||0)+qt;      // sem dia: só a quantidade
+  }
+  salvarTudo(); renderPremios();
+}
+function zerarFaltas(ym, pid){
+  if(!confirm('Limpar as faltas e atestados desta pessoa neste mês?\n\nO que estiver escrito na planilha volta na próxima leitura.')) return;
+  const p=presencaDe(ym, pid);
+  p.faltas=0; p.atestados=0;
+  if(p.datas){ p.datas.faltas=[]; p.datas.atestados=[]; }
+  if(p._dias) Object.keys(p._dias).forEach(k=>{ if(/\|(falta|atestado)$/.test(k)) delete p._dias[k]; });
+  salvarTudo(); renderPremios();
+}
 function abrirAddAus(bid){
   const el=document.getElementById(bid); if(!el) return;
   el.style.display='inline';
@@ -7372,7 +7425,7 @@ function renderPremios(){
     '<b>Faltas e atestados vêm sozinhos da planilha (coluna escrita FALTA ou ATESTADO). Aqui você confere, e pode acrescentar ou tirar um dia na mão com o seletor de data.</b> Clique num dia marcado para tirá-lo.</div></div>';
 
   html+='<div class="card" style="overflow-x:auto;"><table>'+
-    '<tr><th>Pessoa</th><th>Dias</th><th>Peças</th><th>Faltas</th><th>Atestados</th><th>Atrasos>10min</th><th>Saídas</th><th>% Produção</th>'+
+    '<tr><th>Pessoa</th><th>Dias</th><th>Peças</th><th>Faltas / Atestados</th><th>Atrasos>10min</th><th>Saídas</th><th>% Produção</th>'+
     '<th style="background:#eef5e6;">💰 ASSIDUIDADE</th><th style="background:#fdf6e9;">🎯 PRODUÇÃO</th><th>TOTAL</th><th></th></tr>';
   let totGeral=0, totAssid=0, totProd=0;
   pids.map(pid=>({pid, r:calcularPremio(ym,pid,metaMensal), nome:(S.pessoas.find(p=>p.id===pid)||{}).nome||pid}))
@@ -7397,8 +7450,7 @@ function renderPremios(){
     html+='<tr><td><b>'+nome+'</b>'+(r.ajustado?' <span title="'+(r.motivoAjuste||'ajuste manual')+'" style="cursor:help;">✏️</span>':'')+'</td>'+
       '<td>'+r.dias+'</td>'+
       '<td>'+r.pcs+'</td>'+
-      '<td>'+celulaAusencia(ym,pid,'faltas',pres,inp)+'</td>'+
-      '<td>'+celulaAusencia(ym,pid,'atestados',pres,inp)+'</td>'+
+      '<td>'+celulaFaltas(ym,pid,pres)+'</td>'+
       '<td>'+celulaAusencia(ym,pid,'atrasos',pres,inp)+'</td>'+
       '<td>'+celulaAusencia(ym,pid,'saidas',pres,inp)+'</td>'+
       '<td>'+r.pctFinal+'%'+(r.teto<100?' <span class="mini-info">(teto '+r.teto+'%)</span>':'')+
@@ -8132,7 +8184,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.20.0';
+const VERSAO = '4.21.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
