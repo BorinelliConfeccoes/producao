@@ -3748,7 +3748,7 @@ function custoTroca(ciclos){
 /* soma faltas, atestados, atrasos e saídas de uma pessoa entre duas datas (ou nos últimos N dias).
    percorre os meses que o período cobre em S.presenca. */
 function presencaPeriodo(pid, de, ate){
-  const tot={faltas:0, atestados:0, atrasos:0, saidas:0};
+  const tot={faltas:0, atestados:0, atrasos:0, saidas:0, datas:{faltas:[],atestados:[],atrasos:[],saidas:[]}};
   if(!S.presenca) return tot;
   // limites do período
   let ini, fim;
@@ -3762,8 +3762,25 @@ function presencaPeriodo(pid, de, ate){
     const p=S.presenca[ym][pid]; if(!p) return;
     tot.faltas+=p.faltas||0; tot.atestados+=p.atestados||0;
     tot.atrasos+=p.atrasos||0; tot.saidas+=p.saidas||0;
+    // só as datas que caem DENTRO do período pedido (o mês pode entrar pela metade)
+    Object.keys(p.datas||{}).forEach(tipo=>{
+      if(!tot.datas[tipo]) return;
+      (p.datas[tipo]||[]).forEach(iso=>{
+        const [yy,mm,dd]=iso.split('-').map(Number);
+        const d=new Date(yy,mm-1,dd);
+        if(d>=ini && d<=fim && tot.datas[tipo].indexOf(iso)<0) tot.datas[tipo].push(iso);
+      });
+      tot.datas[tipo].sort();
+    });
   });
   return tot;
+}
+/* "02, 09 e 10/09" — do jeito que a pessoa lê */
+function listaDatasBR(isos){
+  if(!isos || !isos.length) return '';
+  const fmt=isos.map(x=>{ const [y,m,d]=x.split('-'); return d+'/'+m; });
+  if(fmt.length===1) return fmt[0];
+  return fmt.slice(0,-1).join(', ')+' e '+fmt[fmt.length-1];
 }
 /* ================= FAIXA FECHADA =================
    O percentual geral saía interpolado (89%, 83%), e faixa quebrada não existe: a
@@ -4742,10 +4759,16 @@ function renderMinha(){
 
   const prM=a.presenca||{faltas:0,atestados:0,atrasos:0,saidas:0};
   const presM=[];
-  if(prM.faltas) presM.push(prM.faltas+' falta'+(prM.faltas>1?'s':'')+' s/ justificativa');
-  if(prM.atestados) presM.push(prM.atestados+' atestado'+(prM.atestados>1?'s':''));
-  if(prM.atrasos) presM.push(prM.atrasos+' atraso'+(prM.atrasos>1?'s':''));
-  if(prM.saidas) presM.push(prM.saidas+' saída'+(prM.saidas>1?'s':'')+' antecipada'+(prM.saidas>1?'s':''));
+  const dts=(prM.datas)||{};
+  const comDia=(n, tipo, rotuloS, rotuloP)=>{
+    if(!n) return null;
+    const d=listaDatasBR(dts[tipo]);
+    return n+' '+(n>1?rotuloP:rotuloS)+(d? ' <b>('+d+')</b>' : '');
+  };
+  [comDia(prM.faltas,'faltas','falta s/ justificativa','faltas s/ justificativa'),
+   comDia(prM.atestados,'atestados','atestado','atestados'),
+   comDia(prM.atrasos,'atrasos','atraso','atrasos'),
+   comDia(prM.saidas,'saidas','saída antecipada','saídas antecipadas')].forEach(x=>{ if(x) presM.push(x); });
   const linhaPresM = presM.length
     ? '<div class="mini-info" style="color:#b23b3b; margin-top:6px;">⚠ '+presM.join(' · ')+'</div>'
     : '<div class="mini-info" style="color:#4d7c2a; margin-top:6px;">✓ Sem faltas no período</div>';
@@ -5208,6 +5231,14 @@ function registrarAusencias(lista){
     p._dias[chaveDia]=true;
     const campo=mapaCampo[a.tipo];
     if(campo) p[campo]=(p[campo]||0)+1;
+    // guarda QUAIS dias, não só quantos: no relatório "3 faltas" não ajuda ninguém,
+    // "02, 09 e 10/09" é o que dá pra conferir com a planilha e conversar com a pessoa.
+    p.datas=p.datas||{};
+    if(campo){
+      p.datas[campo]=p.datas[campo]||[];     // chave PLURAL, a mesma que a tela lê
+      const iso=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+      if(p.datas[campo].indexOf(iso)<0){ p.datas[campo].push(iso); p.datas[campo].sort(); }
+    }
   });
   salvarTudo();
 }
@@ -6550,10 +6581,12 @@ function renderPainelCelula(){
     const cor = g===999? '#666' : (fecharNaFaixa(g)>=100?'#3d4d32': fecharNaFaixa(g)>=80?'#8a7a2e':'#b06b3a');
     const pr=a.presenca||{faltas:0,atestados:0,atrasos:0,saidas:0};
     const presTxt=[];
-    if(pr.faltas) presTxt.push(pr.faltas+' falta'+(pr.faltas>1?'s':'')+' s/ justificativa');
-    if(pr.atestados) presTxt.push(pr.atestados+' atestado'+(pr.atestados>1?'s':''));
-    if(pr.atrasos) presTxt.push(pr.atrasos+' atraso'+(pr.atrasos>1?'s':''));
-    if(pr.saidas) presTxt.push(pr.saidas+' saída'+(pr.saidas>1?'s':'')+' antecipada'+(pr.saidas>1?'s':''));
+    const dd=(pr.datas)||{};
+    const cd=(n,tipo,rS,rP)=>{ if(!n) return null; const d=listaDatasBR(dd[tipo]); return n+' '+(n>1?rP:rS)+(d? ' <b>('+d+')</b>' : ''); };
+    [cd(pr.faltas,'faltas','falta s/ justificativa','faltas s/ justificativa'),
+     cd(pr.atestados,'atestados','atestado','atestados'),
+     cd(pr.atrasos,'atrasos','atraso','atrasos'),
+     cd(pr.saidas,'saidas','saída antecipada','saídas antecipadas')].forEach(x=>{ if(x) presTxt.push(x); });
     const linhaPres = presTxt.length
       ? '<div class="mini-info" style="color:#b23b3b; margin-top:2px;">⚠ '+presTxt.join(' · ')+'</div>'
       : '<div class="mini-info" style="color:#4d7c2a; margin-top:2px;">✓ Sem faltas no período</div>';
@@ -7063,8 +7096,10 @@ function calcularPremio(ym, pid, metaMensalCamisetas){
   let assid=PREMIO_ASSIDUIDADE;
   const faltasInjust=pres.faltas;      // faltas sem atestado
   const atestados=pres.atestados;      // faltas com atestado
+  /* REGRA DAS FALTAS (confirmada pelo Patrick): UMA falta sem justificativa não tira
+     nada. DUAS OU MAIS zeram assiduidade E produção. Antes o corte era na primeira. */
   let motivoAssid='integral';
-  if(faltasInjust>0){ assid=0; motivoAssid='falta sem justificativa'; }
+  if(faltasInjust>=2){ assid=0; motivoAssid=faltasInjust+' faltas sem justificativa'; }
   else if(atestados>=2){ assid=0; motivoAssid=atestados+' atestados'; }
   else if(atestados===1){ assid=PREMIO_ASSIDUIDADE*0.5; motivoAssid='1 atestado (-50%)'; }
   // --- PRODUÇÃO ---
@@ -7094,7 +7129,7 @@ function calcularPremio(ym, pid, metaMensalCamisetas){
     });
     faltouPecas=Math.ceil(faltouPecas);
   }
-  if(faltasInjust>0){ premioProd={valor:0,faixa:0}; motivoProd='falta sem justificativa zera a produção'; }
+  if(faltasInjust>=2){ premioProd={valor:0,faixa:0}; motivoProd=faltasInjust+' faltas sem justificativa zeram a produção (a partir de 2)'; }
   else if(pctFinal<70){
     motivoProd='ficou em '+pctFinal+'%: o mínimo é 70%'+
       (faltouPecas>0? ' — faltaram '+faltouPecas.toLocaleString('pt-BR')+' peças no mês'+
@@ -7109,7 +7144,7 @@ function calcularPremio(ym, pid, metaMensalCamisetas){
   if(ov.assid!=null && ov.assid!==''){ assidFinal=Number(ov.assid)||0; ajustado=true; }
   if(ov.prod!=null && ov.prod!==''){ prodFinal=Number(ov.prod)||0; ajustado=true; }
   return {assid:assidFinal, assidCalc, motivoAssid, pctProd, pctFinal, teto,
-          premioProd:prodFinal, prodCalc, faixaProd:premioProd.faixa, motivoProd, faltouPecas, opsSemMeta,
+          premioProd:prodFinal, prodCalc, faixaProd:premioProd.faixa, motivoProd, faltouPecas, opsSemMeta, faltasInjust,
           detalhePct:pr.detalhe||[], pesoPct:pr.peso||0,
           ajustado, motivoAjuste:ov.motivo||'',
           dias:prod.diasTrab, pcs:prod.pcs, total:assidFinal+prodFinal};
@@ -7236,8 +7271,10 @@ function renderPremios(){
     html+='<tr><td><b>'+nome+'</b>'+(r.ajustado?' <span title="'+(r.motivoAjuste||'ajuste manual')+'" style="cursor:help;">✏️</span>':'')+'</td>'+
       '<td>'+r.dias+'</td>'+
       '<td>'+r.pcs+'</td>'+
-      '<td>'+inp('faltas',pres.faltas)+'</td>'+
-      '<td>'+inp('atestados',pres.atestados)+'</td>'+
+      '<td>'+inp('faltas',pres.faltas)+
+        ((pres.datas&&pres.datas.faltas&&pres.datas.faltas.length)? '<div class="mini-info" style="color:#b23b3b;">'+listaDatasBR(pres.datas.faltas)+'</div>' : '')+'</td>'+
+      '<td>'+inp('atestados',pres.atestados)+
+        ((pres.datas&&pres.datas.atestados&&pres.datas.atestados.length)? '<div class="mini-info">'+listaDatasBR(pres.datas.atestados)+'</div>' : '')+'</td>'+
       '<td>'+inp('atrasos',pres.atrasos)+'</td>'+
       '<td>'+inp('saidas',pres.saidas)+'</td>'+
       '<td>'+r.pctFinal+'%'+(r.teto<100?' <span class="mini-info">(teto '+r.teto+'%)</span>':'')+
@@ -7248,7 +7285,7 @@ function renderPremios(){
       '<td><b>R$ '+r.total.toFixed(0)+'</b></td>'+
       '<td><button class="acao mini sec" onclick="ajustarPremio(\''+ym+'\',\''+pid+'\',\''+nome.replace(/'/g,'')+'\')">ajustar</button>'+
         (r.ajustado?'<br><button class="acao mini" style="margin-top:3px;" onclick="limparOverride(\''+ym+'\',\''+pid+'\')">desfazer</button>':'')+'</td></tr>';
-    if(!r.premioProd && r.pctFinal<70 && !r.ajustado){
+    if(!r.premioProd && r.pctFinal<70 && !r.ajustado && (r.faltasInjust||0)<2){
       html+='<tr><td colspan="12" style="padding-top:0;"><div style="background:#fdf2f1; border-left:4px solid #b23b3b; padding:7px 10px; border-radius:0 6px 6px 0; line-height:1.5;">'+
         '<b>'+nome+' não recebeu o prêmio de produção.</b> '+(r.motivoProd||'')+'.<br>'+
         '<span class="mini-info">A regra: o mínimo é 70%. De 69% sobe pra 70% pela margem de erro de contagem. De 68% pra baixo não entra e não arredonda.</span>'+
@@ -7971,7 +8008,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.15.0';
+const VERSAO = '4.17.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
