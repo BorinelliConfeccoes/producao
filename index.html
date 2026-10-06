@@ -7098,13 +7098,23 @@ function celulaAusencia(ym, pid, campo, pres, inp){
         d[2]+'/'+d[1]+' ×</span>';
     }).join('')+'</div>';
   }
+  /* o seletor de data fica ESCONDIDO até clicar em "+ dia". Com quatro colunas e dez
+     pessoas, deixar os quatro sempre abertos virava um paredão de campos. */
   const primeiro=ym+'-01';
   const [yy,mm]=ym.split('-').map(Number);
   const ultimo=ym+'-'+String(new Date(yy,mm,0).getDate()).padStart(2,'0');
-  h+='<div style="margin-top:3px; white-space:nowrap;">'+
-     '<input type="date" id="dtAus-'+pid+'-'+campo+'" min="'+primeiro+'" max="'+ultimo+'" style="font-size:.7rem; padding:1px 3px; width:118px;">'+
-     '<button class="acao mini sec" style="padding:2px 6px; margin-left:3px;" onclick="addAusencia(\''+ym+'\',\''+pid+'\',\''+campo+'\')" title="marcar este dia">+</button></div>';
+  const bid='boxAus-'+pid+'-'+campo;
+  h+='<div><a href="#" class="mini-info" style="text-decoration:none;" onclick="abrirAddAus(\''+bid+'\');return false;">+ dia</a>'+
+     '<span id="'+bid+'" style="display:none; white-space:nowrap;">'+
+     '<input type="date" id="dtAus-'+pid+'-'+campo+'" min="'+primeiro+'" max="'+ultimo+'" style="font-size:.7rem; padding:1px 3px; width:116px;">'+
+     '<button class="acao mini sec" style="padding:2px 6px; margin-left:3px;" onclick="addAusencia(\''+ym+'\',\''+pid+'\',\''+campo+'\')">ok</button></span></div>';
   return h;
+}
+function abrirAddAus(bid){
+  const el=document.getElementById(bid); if(!el) return;
+  el.style.display='inline';
+  const prev=el.previousElementSibling; if(prev) prev.style.display='none';
+  const inp=el.querySelector('input'); if(inp) inp.focus();
 }
 function setPresenca(ym, pid, campo, valor){
   const p=presencaDe(ym, pid);
@@ -8122,7 +8132,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.19.0';
+const VERSAO = '4.20.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
