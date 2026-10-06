@@ -5002,8 +5002,11 @@ function lerBlocoProducao(g, rData, rFim, pessoa){
     // a palavra TOTAL precisa estar nas 3 primeiras colunas
     const temPalavra=row.slice(0,3).some(x=>normOp(x)==='TOTAL');
     if(!temPalavra) continue;
-    // conta quantas colunas-de-data têm número nesta linha
-    const alinhados=colunasComData.filter(c=>typeof row[c]==='number' && row[c]>0).length;
+    // conta quantas colunas-de-data têm número nesta linha.
+    // ATENÇÃO: vale qualquer número, ZERO INCLUSIVE. Antes isso exigia > 0, e num mês
+    // com muitas faltas a maioria das colunas tem TOTAL 0 — a linha TOTAL era rejeitada,
+    // o leitor caía na soma manual e a produção do mês inteiro vinha errada ou zerada.
+    const alinhados=colunasComData.filter(c=>typeof row[c]==='number').length;
     if(alinhados>melhorScore){ melhorScore=alinhados; rTotal=i; }
   }
   // se nenhuma linha "TOTAL" bateu com as datas, ignora (vamos somar os lançamentos manualmente)
@@ -5030,14 +5033,18 @@ function lerBlocoProducao(g, rData, rFim, pessoa){
     const opTxt=(g[rOp]||[])[c]; if(!opTxt || typeof opTxt!=='string') continue;
     // FALTA / FALTA ATESTADO / ATRASO / SAÍDA no lugar da operação = evento de presença, não produção
     const opN=normOp(opTxt);
-    if(opN==='FALTA ATESTADO' || opN==='ATESTADO' || opN==='FALTA COM ATESTADO'){
-      ausencias.push({pessoa, data, tipo:'atestado'}); continue;
+    /* Antes isso exigia o texto EXATO ("FALTA", "ATESTADO"...). Na prática a planilha
+       traz "FALTOU ATESTADO", "FALTA JUSTIFICADA", "ATESTADO MEDICO", "FALTA 1/2 DIA",
+       e nenhuma era reconhecida: a coluna virava produção zerada e sumia.
+       Agora é por palavra-chave, com o atestado tendo prioridade sobre a falta. */
+    const ehAtestado = /ATESTADO|JUSTIFICAD/.test(opN);
+    const ehFalta    = /\bFALTA|FALTOU|AUSENTE|AUSENCIA/.test(opN);
+    if(ehFalta || ehAtestado){
+      ausencias.push({pessoa, data, tipo: ehAtestado? 'atestado' : 'falta'}); continue;
     }
-    if(opN==='FALTA' || opN==='FALTOU'){
-      ausencias.push({pessoa, data, tipo:'falta'}); continue;
-    }
-    if(opN==='ATRASO' || opN==='ATRASADO'){ ausencias.push({pessoa, data, tipo:'atraso'}); continue; }
-    if(opN==='SAIDA' || opN==='SAIDA ANTECIPADA'){ ausencias.push({pessoa, data, tipo:'saida'}); continue; }
+    if(/ATRASO|ATRASAD/.test(opN)){ ausencias.push({pessoa, data, tipo:'atraso'}); continue; }
+    if(/SAIDA|SAIU (ANTES|CEDO)|ANTECIPAD/.test(opN)){ ausencias.push({pessoa, data, tipo:'saida'}); continue; }
+    if(/^(FERIAS|FOLGA|FERIADO|LICENCA|ATENDIMENTO)/.test(opN)) continue;   // não é falta nem produção
     const horas=Number((g[rHoras]||[])[c])||0;
     // se a planilha tem a linha TOTAL, ela é a fonte da verdade (a costureira já conferiu).
     // Só somamos os lançamentos manualmente quando NÃO há linha TOTAL.
@@ -7910,7 +7917,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.12.0';
+const VERSAO = '4.13.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -8125,7 +8132,7 @@ async function varrerPasta(manual){
   const perm=await _permPasta(!!manual);
   if(perm!=='ok'){ _pastaPerm='pedir'; renderPasta(); if(manual) alert('O navegador precisa da sua autorização pra ler a pasta de novo. Clique em "Reconectar a pasta".'); return; }
   _pastaPerm='ok'; _varrendo=true; _pastaMsg='Conferindo a pasta...'; renderPasta();
-  const novos=[], avisos=[], naoReconhecidos=[], ilegiveis=[];
+  const novos=[], ausencias=[], avisos=[], naoReconhecidos=[], ilegiveis=[];
   let lidos=0, pulados=0;
   try{
     const arquivos=[]; await _listarArquivos(_pastaHandle, '', arquivos, 0);
@@ -8142,7 +8149,7 @@ async function varrerPasta(manual){
         const wb=XLSX.read(await f.arrayBuffer(), {type:'array', cellDates:true});
         r=lerPlanilhaProducao(wb, a.nome);
       }catch(e){ ilegiveis.push(a.caminho+' → '+e.message); S.pastaCache[a.caminho]=assinatura; continue; }
-      if(!r.lanc.length){ S.pastaCache[a.caminho]=assinatura; continue; }
+      if(!r.lanc.length && !(r.ausencias||[]).length){ S.pastaCache[a.caminho]=assinatura; continue; }
       /* CONFERÊNCIA DA PASTA CONTRA AS DATAS DE DENTRO:
          é exatamente o erro de hoje virando alarme. Arquivo em "08-agosto" com
          datas de julho não entra calado. */
@@ -8158,7 +8165,10 @@ async function varrerPasta(manual){
         }
       }
       r.lanc.forEach(l=>{ l.pessoaId=pes.id; l.pessoa=pes.nome; l.origemArq=a.caminho; novos.push(l); });
-      (r.faixas||[]).forEach(x=>{});
+      // FALTA / ATESTADO / ATRASO / SAÍDA vinham sendo lidos do arquivo e descartados aqui:
+      // a varredura automática só repassava r.lanc. Era por isso que a importação pelo
+      // botão registrava as faltas e a pasta não.
+      (r.ausencias||[]).forEach(au=>{ au.pessoaId=pes.id; au.pessoa=pes.nome; ausencias.push(au); });
       S.pastaCache[a.caminho]=assinatura; lidos++;
     }
   }catch(e){ _varrendo=false; _pastaMsg='Falhou: '+e.message; renderPasta(); return; }
@@ -8168,8 +8178,10 @@ async function varrerPasta(manual){
   S.pastaDesconhecidos=naoReconhecidos;
   S.pastaUltima=Date.now();
 
+  if(ausencias.length) registrarAusencias(ausencias);
+  const txtAus = ausencias.length? ' '+ausencias.length+' falta(s)/atestado(s) registrados.' : '';
   if(!novos.length){
-    _pastaMsg = lidos? 'Li '+lidos+' arquivo(s), sem lançamento novo.' : 'Nada mudou desde a última conferência ('+pulados+' arquivos conferidos).';
+    _pastaMsg = (lidos? 'Li '+lidos+' arquivo(s), sem lançamento novo.' : 'Nada mudou desde a última conferência ('+pulados+' arquivos conferidos).')+txtAus;
     salvarTudo(); renderPasta(); renderTudo(); return;
   }
   /* Operação com sigla que o sistema não conhece NÃO pode ser adivinhada.
@@ -8185,7 +8197,7 @@ async function varrerPasta(manual){
     return;
   }
   gravarImportacao(novos, [], {silencioso:true});
-  _pastaMsg='Pronto: '+lidos+' arquivo(s) atualizado(s), '+novos.length+' lançamento(s).';
+  _pastaMsg='Pronto: '+lidos+' arquivo(s) atualizado(s), '+novos.length+' lançamento(s).'+txtAus;
   renderPasta();
 }
 
