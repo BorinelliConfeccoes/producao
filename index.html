@@ -3240,6 +3240,7 @@ function mesclarEstado(remoto){
     novoOrdens.length  > (remoto.ordens||[]).length ||
     novoPessoas.length > (remoto.pessoas||[]).length;
   S=Object.assign(S, remoto);
+  migrarContagemFaltas();   // a nuvem pode trazer contadores velhos inflados
   S.ciclos=novoCiclos; S.ordens=novoOrdens; S.pessoas=novoPessoas; S.removidos=tomb;
   return euTinhaMais;
 }
@@ -3364,20 +3365,42 @@ function migrarMetasPlanilha(){
 /* Os contadores já gravados foram inflados por releituras sucessivas (Jackson com 8
    e só 4 dias marcados). Recalcula todo mundo a partir dos dias + o que sobrava vira
    lançamento manual, pra não apagar nada que o Patrick tenha digitado de propósito. */
+/* IMPORTANTE: isso NÃO pode ter trava global de "já rodei". O estado chega do Firebase
+   depois do carregamento e substitui S.presenca pelo que está na nuvem, que pode estar
+   com os contadores velhos inflados. A normalização é por REGISTRO (quem já tem .manual
+   está normalizado) e roda em todo carregamento e em toda sincronização. */
+/* a contagem automática saiu: limpa os resíduos (datas/manual/trava) que as versões
+   anteriores gravaram, mantendo o número que está valendo */
 function migrarContagemFaltas(){
-  if(S.contFaltasRev >= 1) return;
-  S.contFaltasRev=1;
   Object.keys(S.presenca||{}).forEach(ym=>{
     Object.keys(S.presenca[ym]||{}).forEach(pid=>{
       const p=S.presenca[ym][pid]; if(!p) return;
-      p.datas=p.datas||{}; p.manual=p.manual||{};
-      ['faltas','atestados','atrasos','saidas'].forEach(c=>{
-        const comDia=(p.datas[c]||[]).length;
-        const atual=Math.max(0, Number(p[c]||0));
-        // tudo que havia além dos dias marcados vira "manual", mas no máximo o que
-        // sobrou de UMA leitura — o excedente é duplicata de releitura e some
-        p.manual[c]=Math.max(0, Math.min(atual-comDia, comDia? 0 : atual));
-      });
+      if(p.datas || p.manual || p.travado || p._dias){
+        ['faltas','atestados','atrasos','saidas'].forEach(c=>{
+          const comDia=((p.datas||{})[c]||[]).length;
+          if(comDia) p[c]=comDia;                      // tinha dias lidos: vale a quantidade de dias
+          p[c]=Math.max(0, Math.floor(Number(p[c]||0)));
+        });
+        delete p.datas; delete p.manual; delete p.travado; delete p._dias;
+      }
+    });
+  });
+}
+function migrarContagemFaltasAntiga(){
+  Object.keys(S.presenca||{}).forEach(ym=>{
+    Object.keys(S.presenca[ym]||{}).forEach(pid=>{
+      const p=S.presenca[ym][pid]; if(!p) return;
+      p.datas=p.datas||{};
+      if(!p.manual){
+        p.manual={};
+        ['faltas','atestados','atrasos','saidas'].forEach(c=>{
+          const comDia=(p.datas[c]||[]).length;
+          const atual=Math.max(0, Number(p[c]||0));
+          // o que havia além dos dias marcados só sobrevive quando NÃO há dia nenhum;
+          // com dias marcados, o excedente é duplicata de releitura e some
+          p.manual[c]=Math.max(0, comDia? 0 : atual);
+        });
+      }
       recalcAusencias(p);
     });
   });
@@ -4786,16 +4809,11 @@ function renderMinha(){
 
   const prM=a.presenca||{faltas:0,atestados:0,atrasos:0,saidas:0};
   const presM=[];
-  const dts=(prM.datas)||{};
-  const comDia=(n, tipo, rotuloS, rotuloP)=>{
-    if(!n) return null;
-    const d=listaDatasBR(dts[tipo]);
-    return n+' '+(n>1?rotuloP:rotuloS)+(d? ' <b>('+d+')</b>' : '');
-  };
-  [comDia(prM.faltas,'faltas','falta s/ justificativa','faltas s/ justificativa'),
-   comDia(prM.atestados,'atestados','atestado','atestados'),
-   comDia(prM.atrasos,'atrasos','atraso','atrasos'),
-   comDia(prM.saidas,'saidas','saída antecipada','saídas antecipadas')].forEach(x=>{ if(x) presM.push(x); });
+  const comDia=(n, rotuloS, rotuloP)=> n? (n+' '+(n>1?rotuloP:rotuloS)) : null;
+  [comDia(prM.faltas,'falta s/ justificativa','faltas s/ justificativa'),
+   comDia(prM.atestados,'atestado','atestados'),
+   comDia(prM.atrasos,'atraso','atrasos'),
+   comDia(prM.saidas,'saída antecipada','saídas antecipadas')].forEach(x=>{ if(x) presM.push(x); });
   const linhaPresM = presM.length
     ? '<div class="mini-info" style="color:#b23b3b; margin-top:6px;">⚠ '+presM.join(' · ')+'</div>'
     : '<div class="mini-info" style="color:#4d7c2a; margin-top:6px;">✓ Sem faltas no período</div>';
@@ -5331,7 +5349,7 @@ async function importarPlanilha(files){
       (r.faixas||[]).forEach(f=>{ faixasTodas.push(f); });
     }
     // registra as faltas/atestados/atrasos/saídas lidos da planilha
-    if(ausenciasTodas.length) registrarAusencias(ausenciasTodas);
+    // faltas são digitadas à mão na tela de Prêmios, não vêm da planilha
     if(pulados.length) alert('Não importei '+pulados.length+' planilha(s) porque o nome não bateu:\n\n• '+pulados.join('\n• ')+'\n\nImporte cada uma escolhendo a pessoa certa.');
     if(semPessoa.length && !todos.length && !ausenciasTodas.length) return alert('Não reconheci a pessoa: '+[...new Set(semPessoa)].join(', ')+'.\n\nEscolha a pessoa na lista ao importar, ou cadastre com esse mesmo nome em Ajustes → Pessoas.');
     if(!todos.length){
@@ -6626,12 +6644,11 @@ function renderPainelCelula(){
     const cor = g===999? '#666' : (fecharNaFaixa(g)>=100?'#3d4d32': fecharNaFaixa(g)>=80?'#8a7a2e':'#b06b3a');
     const pr=a.presenca||{faltas:0,atestados:0,atrasos:0,saidas:0};
     const presTxt=[];
-    const dd=(pr.datas)||{};
-    const cd=(n,tipo,rS,rP)=>{ if(!n) return null; const d=listaDatasBR(dd[tipo]); return n+' '+(n>1?rP:rS)+(d? ' <b>('+d+')</b>' : ''); };
-    [cd(pr.faltas,'faltas','falta s/ justificativa','faltas s/ justificativa'),
-     cd(pr.atestados,'atestados','atestado','atestados'),
-     cd(pr.atrasos,'atrasos','atraso','atrasos'),
-     cd(pr.saidas,'saidas','saída antecipada','saídas antecipadas')].forEach(x=>{ if(x) presTxt.push(x); });
+    const cd=(n,rS,rP)=> n? (n+' '+(n>1?rP:rS)) : null;
+    [cd(pr.faltas,'falta s/ justificativa','faltas s/ justificativa'),
+     cd(pr.atestados,'atestado','atestados'),
+     cd(pr.atrasos,'atraso','atrasos'),
+     cd(pr.saidas,'saída antecipada','saídas antecipadas')].forEach(x=>{ if(x) presTxt.push(x); });
     const linhaPres = presTxt.length
       ? '<div class="mini-info" style="color:#b23b3b; margin-top:2px;">⚠ '+presTxt.join(' · ')+'</div>'
       : '<div class="mini-info" style="color:#4d7c2a; margin-top:2px;">✓ Sem faltas no período</div>';
@@ -6705,12 +6722,11 @@ function blocoPremioFicha(pid){
   const perdeu = Math.max(0, semNada - r.total);
 
   const linhas=[];
-  const dts=(pres.datas)||{};
-  const cd=(n,tipo,rS,rP)=>{ if(!n) return null; const d=listaDatasBR(dts[tipo]); return n+' '+(n>1?rP:rS)+(d? ' <b>('+d+')</b>' : ''); };
-  [cd(pres.faltas,'faltas','falta sem justificativa','faltas sem justificativa'),
-   cd(pres.atestados,'atestados','atestado','atestados'),
-   cd(pres.atrasos,'atrasos','atraso acima de 10 min','atrasos acima de 10 min'),
-   cd(pres.saidas,'saidas','saída antecipada','saídas antecipadas')].forEach(x=>{ if(x) linhas.push(x); });
+  const cd=(n,rS,rP)=>n? (n+' '+(n>1?rP:rS)) : null;
+  [cd(pres.faltas,'falta sem justificativa','faltas sem justificativa'),
+   cd(pres.atestados,'atestado','atestados'),
+   cd(pres.atrasos,'atraso acima de 10 min','atrasos acima de 10 min'),
+   cd(pres.saidas,'saída antecipada','saídas antecipadas')].forEach(x=>{ if(x) linhas.push(x); });
 
   let h='<div class="notaFicha nfPremio"><b>💰 Prêmio de '+mesTx+'</b>'+
     '<table class="tbPremio" style="margin-top:8px;"><tr>'+
@@ -7126,6 +7142,9 @@ function presencaDe(ym, pid){
 /* a célula da tabela de Prêmios: o número, os dias marcados (clicáveis pra tirar)
    e um seletor de data pra acrescentar à mão */
 function celulaAusencia(ym, pid, campo, pres, inp){
+  return inp(campo, Number(pres[campo]||0));
+}
+function celulaAusenciaAntiga(ym, pid, campo, pres, inp){
   const dts=((pres.datas)||{})[campo]||[];
   const cor = campo==='faltas'? '#b23b3b' : '#8a6a2e';
   let h=inp(campo, pres[campo]);
@@ -7152,6 +7171,13 @@ function celulaAusencia(ym, pid, campo, pres, inp){
 /* UMA coluna só pras faltas: quantas foram e se tem atestado. Quatro colunas de
    número abertas ao mesmo tempo era um convite a digitar 10 atestados sem querer. */
 function celulaFaltas(ym, pid, pres){
+  const campo=(c,lab,cor)=>'<div style="display:inline-block; margin-right:12px; text-align:center;">'+
+    '<div class="mini-info" style="color:'+cor+';">'+lab+'</div>'+
+    '<input type="number" min="0" style="width:52px; text-align:center;" value="'+Number(pres[c]||0)+'" '+
+    'onchange="setPresenca(\''+ym+'\',\''+pid+'\',\''+c+'\',this.value)"></div>';
+  return campo('faltas','sem atestado','#b23b3b')+campo('atestados','com atestado','#8a6a2e');
+}
+function celulaFaltasAntiga(ym, pid, pres){
   const dts=(pres.datas)||{};
   const semA=Number(pres.faltas||0), comA=Number(pres.atestados||0);
   let h='';
@@ -7223,13 +7249,8 @@ function abrirAddAus(bid){
 }
 function setPresenca(ym, pid, campo, valor){
   const p=presencaDe(ym, pid);
-  const alvo=Math.max(0, Math.floor(Number(valor)||0));
-  p.datas=p.datas||{}; p.manual=p.manual||{};
-  const comDia=(p.datas[campo]||[]).length;
-  if(alvo < comDia) p.datas[campo]=(p.datas[campo]||[]).slice(0, alvo);
-  p.manual[campo]=Math.max(0, alvo - (p.datas[campo]||[]).length);
-  p.travado=true;
-  recalcAusencias(p);
+  p[campo]=Math.max(0, Math.floor(Number(valor)||0));
+  p.datas={}; p.manual={}; p._dias={};   // sem contagem automática: o número é o que você digitou
   salvarTudo(); renderPremios();
 }
 /* ---- marcar falta à mão, com o DIA ----
@@ -7477,7 +7498,7 @@ function renderPremios(){
   if(!pids.length){ box.innerHTML='<div class="card mini-info">Ninguém produziu neste mês.</div>'; return; }
 
   let html='<div class="card" style="background:#fdf6e9; border-left:4px solid #c7a581;"><div class="mini-info">'+
-    '<b>Faltas e atestados vêm sozinhos da planilha (coluna escrita FALTA ou ATESTADO). Aqui você confere, e pode acrescentar ou tirar um dia na mão com o seletor de data.</b> Assim que você ajusta uma pessoa na mão, a planilha para de mexer nela (aparece 🔒). Dá pra voltar atrás no link ao lado.</div></div>';
+    '<b>Faltas, atestados, atrasos e saídas são digitados aqui.</b> A planilha não mexe nestes números. O cálculo roda sozinho pelas regras assim que você digita.</div></div>';
 
   html+='<div class="card" style="overflow-x:auto;"><table>'+
     '<tr><th>Pessoa</th><th>Dias</th><th>Peças</th><th>Faltas / Atestados</th><th>Atrasos>10min</th><th>Saídas</th><th>% Produção</th>'+
@@ -8239,7 +8260,7 @@ function renderSimu(){
 
 /* ================= NAV / RENDER ================= */
 /* ================= VERSÃO / ATUALIZAÇÃO / ERROS ================= */
-const VERSAO = '4.22.0';
+const VERSAO = '4.24.0';
 const ERROS = [];
 window.addEventListener('error', e=>{
   ERROS.push({quando:new Date().toLocaleString('pt-BR'), msg:e.message, onde:(e.filename||'')+':'+(e.lineno||''), versao:VERSAO});
@@ -8500,8 +8521,9 @@ async function varrerPasta(manual){
   S.pastaDesconhecidos=naoReconhecidos;
   S.pastaUltima=Date.now();
 
-  if(ausencias.length) registrarAusencias(ausencias);
-  const txtAus = ausencias.length? ' '+ausencias.length+' falta(s)/atestado(s) registrados.' : '';
+  // A planilha NÃO lança mais falta: o Patrick digita na tela de Prêmios. A coluna
+  // escrita FALTA continua sendo reconhecida só pra não virar produção zerada.
+  const txtAus = '';
   if(!novos.length){
     _pastaMsg = (lidos? 'Li '+lidos+' arquivo(s), sem lançamento novo.' : 'Nada mudou desde a última conferência ('+pulados+' arquivos conferidos).')+txtAus;
     salvarTudo(); renderPasta(); renderTudo(); return;
